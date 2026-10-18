@@ -1,0 +1,9 @@
+node_modules/
+output/
+.DS_Store
+Thumbs.db
+*.log
+*.zip
+test-*.mjs
+generate-*.mjs
+*.pdf

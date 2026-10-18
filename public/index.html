@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Procesador de Manifiestos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --primary-light: #eff6ff;
+      --success: #16a34a;
+      --success-hover: #15803d;
+      --border-color: #e2e8f0;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --radius: 14px;
+      --shadow: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 48px 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 640px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .header h1 {
+      font-size: 1.85rem;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      color: var(--text-main);
+      margin-bottom: 8px;
+    }
+
+    .header p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border-color);
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* File Uploader Component */
+    .file-dropzone {
+      border: 2px dashed #cbd5e1;
+      border-radius: var(--radius);
+      padding: 40px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: #fafafa;
+      position: relative;
+    }
+
+    .file-dropzone:hover, .file-dropzone.dragover {
+      border-color: var(--primary);
+      background: var(--primary-light);
+    }
+
+    .file-dropzone input[type="file"] {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .file-icon {
+      width: 52px;
+      height: 52px;
+      margin: 0 auto 12px;
+      color: var(--primary);
+    }
+
+    .file-label {
+      font-weight: 600;
+      font-size: 1.05rem;
+      color: var(--text-main);
+      margin-bottom: 6px;
+    }
+
+    .file-hint {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .selected-file-info {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: #f1f5f9;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text-main);
+      word-break: break-all;
+    }
+
+    .selected-file-info.active {
+      display: flex;
+    }
+
+    /* Action Button */
+    .btn-action {
+      background: var(--primary);
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      padding: 16px 24px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.1s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .btn-action:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    .btn-action:active:not(:disabled) {
+      transform: scale(0.99);
+    }
+
+    .btn-action:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+    }
+
+    /* Large Download Button (Requirement 3) */
+    .btn-download-large {
+      display: none;
+      background: var(--success);
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      padding: 18px 24px;
+      font-size: 1.12rem;
+      font-weight: 800;
+      cursor: pointer;
+      text-decoration: none;
+      text-align: center;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(22, 163, 74, 0.25);
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    .btn-download-large.active {
+      display: flex;
+    }
+
+    .btn-download-large:hover {
+      background: var(--success-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(22, 163, 74, 0.35);
+    }
+
+    /* Loading Spinner */
+    .spinner {
+      display: none;
+      width: 22px;
+      height: 22px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Status Notifications */
+    .status-box {
+      display: none;
+      padding: 14px 18px;
+      border-radius: 10px;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+
+    .status-box.active {
+      display: block;
+    }
+
+    .status-box.info {
+      background: #eff6ff;
+      color: #1e40af;
+      border: 1px solid #bfdbfe;
+    }
+
+    .status-box.error {
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+    }
+
+    .status-box.success {
+      background: #f0fdf4;
+      color: #166534;
+      border: 1px solid #bbf7d0;
+    }
+
+    /* Results section */
+    .results-container {
+      display: none;
+      margin-top: 24px;
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border-color);
+      padding: 24px;
+    }
+
+    .results-container.active {
+      display: block;
+    }
+
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .results-header h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .badge-total {
+      background: #e2e8f0;
+      color: #334155;
+      font-size: 0.82rem;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-weight: 700;
+    }
+
+    .file-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 360px;
+      overflow-y: auto;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #f8fafc;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      font-size: 0.88rem;
+    }
+
+    .file-details {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      overflow: hidden;
+    }
+
+    .file-name {
+      font-weight: 600;
+      color: var(--text-main);
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .file-status-badge {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .status-ok {
+      background: #dcfce7;
+      color: #15803d;
+    }
+
+    .status-fallback {
+      background: #fef3c7;
+      color: #b45309;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="header">
+      <h1>Procesamiento de Manifiestos</h1>
+      <p>División dinámica por página, OCR y descarga de paquete .ZIP</p>
+    </div>
+
+    <!-- Panel Principal según especificación exacta -->
+    <div class="card">
+      
+      <!-- Componente de carga de archivos (File Uploader) exclusivamente .pdf -->
+      <div class="file-dropzone" id="dropzone">
+        <svg class="file-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+        </svg>
+        <div class="file-label">Selecciona o arrastra tu archivo PDF</div>
+        <div class="file-hint">Formato admitido: exclusivamente archivos con formato .pdf</div>
+        <input type="file" id="manifestPdf" accept=".pdf" />
+      </div>
+
+      <div class="selected-file-info" id="fileInfo">
+        <svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/>
+        </svg>
+        <span id="fileNameDisplay"></span>
+      </div>
+
+      <!-- Botón de acción con el texto exacto requerido -->
+      <button type="button" class="btn-action" id="btnProcess" disabled>
+        <div class="spinner" id="spinner"></div>
+        <span id="btnText">Procesar Manifiesto</span>
+      </button>
+
+      <!-- Mensajes de estado -->
+      <div class="status-box" id="statusBox"></div>
+
+      <!-- Botón grande para Descargar archivos procesados (.ZIP) (Requisito 3) -->
+      <a href="#" class="btn-download-large" id="btnDownloadZip">
+        <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" 
+            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+        <span>Descargar archivos procesados (.ZIP)</span>
+      </a>
+
+    </div>
+
+    <!-- Contenedor de Resultados -->
+    <div class="results-container" id="resultsContainer">
+      <div class="results-header">
+        <h2>Detalle de Páginas Procesadas</h2>
+        <span class="badge-total" id="badgeTotal">0 páginas</span>
+      </div>
+
+      <ul class="file-list" id="fileList"></ul>
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('manifestPdf');
+    const dropzone = document.getElementById('dropzone');
+    const fileInfo = document.getElementById('fileInfo');
+    const fileNameDisplay = document.getElementById('fileNameDisplay');
+    const btnProcess = document.getElementById('btnProcess');
+    const btnText = document.getElementById('btnText');
+    const spinner = document.getElementById('spinner');
+    const statusBox = document.getElementById('statusBox');
+    const btnDownloadZip = document.getElementById('btnDownloadZip');
+    const resultsContainer = document.getElementById('resultsContainer');
+    const badgeTotal = document.getElementById('badgeTotal');
+    const fileList = document.getElementById('fileList');
+
+    let selectedFile = null;
+
+    // Manejo de drag and drop
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+      });
+    });
+
+    dropzone.addEventListener('drop', (e) => {
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleFileSelection(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        handleFileSelection(e.target.files[0]);
+      }
+    });
+
+    function handleFileSelection(file) {
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        showStatus('Error: El archivo debe tener exclusivamente formato .pdf.', 'error');
+        resetSelection();
+        return;
+      }
+
+      selectedFile = file;
+      fileNameDisplay.textContent = `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
+      fileInfo.classList.add('active');
+      btnProcess.disabled = false;
+      btnDownloadZip.classList.remove('active');
+      hideStatus();
+      resultsContainer.classList.remove('active');
+    }
+
+    function resetSelection() {
+      selectedFile = null;
+      fileInput.value = '';
+      fileInfo.classList.remove('active');
+      btnProcess.disabled = true;
+      btnDownloadZip.classList.remove('active');
+    }
+
+    function showStatus(message, type = 'info') {
+      statusBox.textContent = message;
+      statusBox.className = `status-box active ${type}`;
+    }
+
+    function hideStatus() {
+      statusBox.className = 'status-box';
+    }
+
+    // Acción al presionar "Procesar Manifiesto"
+    btnProcess.addEventListener('click', async () => {
+      if (!selectedFile) return;
+
+      btnProcess.disabled = true;
+      spinner.style.display = 'inline-block';
+      btnText.textContent = 'Procesando en la nube... Por favor espere';
+      showStatus('Contando páginas, ejecutando OCR en memoria y empaquetando el archivo ZIP...', 'info');
+      btnDownloadZip.classList.remove('active');
+      resultsContainer.classList.remove('active');
+
+      const formData = new FormData();
+      formData.append('manifestPdf', selectedFile);
+
+      try {
+        const response = await fetch('/api/process-manifest', {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || data.error) {
+          throw new Error(data.error || 'Ocurrió un error en el servidor al procesar el archivo.');
+        }
+
+        showStatus(`¡Procesamiento exitoso! Se procesaron dinámicamente ${data.totalPages} páginas. Ya puedes descargar tu archivo comprimido.`, 'success');
+        
+        // Configurar y mostrar el botón grande de descarga
+        btnDownloadZip.href = `/api/download-zip/${data.downloadId}`;
+        btnDownloadZip.classList.add('active');
+
+        renderResults(data);
+      } catch (err) {
+        showStatus('Error al procesar: ' + err.message, 'error');
+      } finally {
+        btnProcess.disabled = false;
+        spinner.style.display = 'none';
+        btnText.textContent = 'Procesar Manifiesto';
+      }
+    });
+
+    function renderResults(data) {
+      badgeTotal.textContent = `${data.totalPages} página(s)`;
+      fileList.innerHTML = '';
+
+      data.files.forEach(file => {
+        const li = document.createElement('li');
+        li.className = 'file-item';
+
+        const isDetected = file.status === 'DETECTADA';
+        const badgeClass = isDetected ? 'status-ok' : 'status-fallback';
+        const badgeLabel = isDetected ? 'Razón Social Detectada' : 'Empresa No Detectada';
+
+        li.innerHTML = `
+          <div class="file-details">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color:#ef4444; flex-shrink:0;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+            </svg>
+            <div style="overflow:hidden;">
+              <div class="file-name" title="${file.fileName}">${file.fileName}</div>
+              <span class="file-status-badge ${badgeClass}">${badgeLabel}</span>
+            </div>
+          </div>
+          <span style="font-size:0.8rem; color:#64748b; font-weight:500;">Pág. ${file.page}</span>
+        `;
+        fileList.appendChild(li);
+      });
+
+      resultsContainer.classList.add('active');
+    }
+  </script>
+</body>
+</html>
