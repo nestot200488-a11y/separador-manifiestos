@@ -72,92 +72,92 @@ setInterval(() => {
 
 /**
  * Sanitizer de nombre de empresa para corrección ortográfica, formateo limpio y rutas seguras
- * Reglas estrictas:
- * 1. Punto de corte estricto para el renglón antes de términos de domicilio (DOMICILIO, AV., CALLE, C.P., CP, MUNICIPIO, EDO, etc.)
- *    o títulos de casillas contiguas (NO DE CLIENTE, FOLIO, etc.).
- * 2. Filtrado extensivo de títulos impresos del formato SEMARNAT ("4.- RAZON SOCIAL...", "1.- NÚM DE REGISTRO...", "NO DE CLIENTE", "FOLIO").
- * 3. Limpieza de espacios especiales ("FARMACIA S" -> "FARMACIAS", espacios dobles) y símbolos raros al inicio/final.
- * 4. Asignación automática de EMPRESA_NO_DETECTADA (null) si empieza con "DOMICILIO", "NO DE CLIENTE" o títulos del formato.
- * 5. Restricción estricta de longitud máxima (<= 60 caracteres) para evitar error de WinRAR / MAX_PATH.
+ * Reglas definitivas:
+ * 1. Corte (split) seguro de "DOMICILIO": si el texto extraído incluye "DOMICILIO", se queda exclusivamente con la parte izquierda.
+ * 2. Limpieza de caracteres basura iniciales: "4.-", "4-", "L+", ")", "(", "-", etc.
+ * 3. Corrección ortográfica inteligente de Farmacias del Ahorro ("FARMACAS", "OER- AHONNO", etc. -> "FARMACIAS DEL AHORRO").
+ * 4. Eliminación estricta de sufijos numéricos de página o residuos (como "_1", "_5", "_39", "ILO_5").
+ * 5. Mayúsculas, eliminación de caracteres no permitidos en Windows y límite máximo de 60 caracteres.
  */
 function sanitizeCompanyName(name) {
   if (!name) return null;
 
   let text = name.trim();
 
-  // 1. PUNTO DE CORTE ESTRICTO PARA EL RENGLÓN (Evitar arrastre de casilla de domicilio o campos contiguos)
-  const cutoffRegex = /\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|C[OÓ]DIGO\s+POSTAL|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|CIUDAD|CD\.?|TEL[EÉ]FONO|TEL\.?|RFC\b|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b/i;
-  const cutoffMatch = text.match(cutoffRegex);
-  if (cutoffMatch) {
-    if (cutoffMatch.index === 0) {
-      // Si empieza directamente con un término de dirección o título, no se detectó empresa válida
-      return null;
-    }
-    text = text.substring(0, cutoffMatch.index).trim();
+  // 1. CORTE SEGURO EN "DOMICILIO": Tomar exclusivamente la parte izquierda
+  if (/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i.test(text)) {
+    const parts = text.split(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b[:.-]?/i);
+    text = parts[0].trim();
   }
 
-  // 2. FILTRADO EXTENSIVO DE TÍTULOS IMPRESOS DEL FORMATO SEMARNAT
-  const titlesToRemove = [
-    /(?:4\s*[\.\-]*\s*)?RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?\s*[:.-]?/gi,
-    /\bEMPRESA\s+GENERADORA\s*[:.-]?/gi,
-    /\bGENERADORA\s*[:.-]?/gi,
-    /(?:1\s*[\.\-]*\s*)?N[UÚ]M\.?\s*DE\s*REGISTRO(?:\s+AMBIENTAL)?\s*[:.-]?\s*[\w\-\/]*/gi,
-    /\bN\.?R\.?A\.?\s*[:.-]?\s*[\w\-\/]*/gi,
-    /\b(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE\s*[:.-]?\s*\w*/gi,
-    /\bFOLIO(?:\s+B[\-]?\s*1)?\s*[:.-]?\s*\w*/gi
-  ];
-
-  for (const regex of titlesToRemove) {
-    text = text.replace(regex, ' ');
+  // Corte seguro ante términos comunes de dirección si se colaron
+  const addressCutRegex = /\b(?:AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO)\b/i;
+  const addrMatch = text.match(addressCutRegex);
+  if (addrMatch && addrMatch.index > 0) {
+    text = text.substring(0, addrMatch.index).trim();
   }
 
-  // 3. LIMPIEZA DE ESPACIOS ESPECIALES Y CORRECCIÓN ORTOGRÁFICA
-  // Si lee "FARMACIA S" (con espacio), unirlo para que quede siempre como "FARMACIAS"
+  // Corte si se colaron casillas contiguas como NO DE CLIENTE o FOLIO
+  if (/\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b/i.test(text)) {
+    const clientParts = text.split(/\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b[:.-]?/i);
+    text = clientParts[0].trim();
+  }
+
+  // 2. LIMPIEZA DE PREFIJOS Y CARACTERES BASURA DEL INICIO: "4.-", "4-", "L+", ")", "(", "-"
+  text = text.replace(/^(?:4\s*[\.\-]+\s*|L\s*[\+\-]\s*)+/gi, '').trim();
+  text = text.replace(/^[\s)("'\-_+=:;.,\/\\]+/g, '').trim();
+  text = text.replace(/^[^A-Z0-9ÁÉÍÓÚÑ]+/gi, '').trim();
+
+  // 3. CORRECCIÓN Y NORMALIZACIÓN INTELIGENTE DE MARCA:
+  // Normalizar variaciones mal leídas como "FARMACAS", "OER- AHONNO", etc. a "FARMACIAS DEL AHORRO"
+  text = text.replace(/\bOER[\s\-_]*AHONNO\b/gi, 'DEL AHORRO');
+  text = text.replace(/\bDEL[\s\-_]*AHONNO\b/gi, 'DEL AHORRO');
+  text = text.replace(/\bOER[\s\-_]*AHORRO\b/gi, 'DEL AHORRO');
+  text = text.replace(/\bDELAHORRO\b/gi, 'DEL AHORRO');
+
   text = text.replace(/\bFARMACIA\s+S\b/gi, 'FARMACIAS');
   text = text.replace(/\bFARMACTAS\b/gi, 'FARMACIAS');
   text = text.replace(/\bFARMACIS\b/gi, 'FARMACIAS');
+  text = text.replace(/\bFARMACAS\b/gi, 'FARMACIAS');
+
+  // Si dice solo "DEL AHORRO" al inicio por recorte de logotipo OCR, anteponer FARMACIAS
+  text = text.replace(/^DEL\s+AHORRO\b/gi, 'FARMACIAS DEL AHORRO');
+
+  // Variaciones compuestas
   text = text.replace(/\bFARMACIASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
   text = text.replace(/\bFARMACTASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
-  text = text.replace(/\bDELAHORRO\b/gi, 'DEL AHORRO');
+  text = text.replace(/\bFARMACASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
 
-  // Convertir todo a MAYÚSCULAS
+  // 4. ELIMINAR SUFIJOS NUMÉRICOS DE PÁGINA O RESIDUOS COMO "ILO_5", "_5", "_39", " 5"
+  text = text.replace(/\bILO[_\s\-]*\d+$/gi, '').trim();
+  text = text.replace(/[_\s\-]+\d+$/g, '').trim();
+
+  // Convertir a MAYÚSCULAS
   text = text.toUpperCase();
 
   // Eliminar caracteres especiales que rompan rutas de Windows (|, ,, ;, ., #) y los ilegales estándar
   text = text.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
 
-  // Remueve espacios dobles
+  // Limpieza de espacios dobles
   text = text.replace(/\s{2,}/g, ' ').trim();
 
-  // Remueve cualquier símbolo raro al inicio o al final (como ")", "(", "-", "_", "+", etc.)
+  // Limpiar cualquier símbolo sobrante al inicio o al final
   text = text.replace(/^[^A-Z0-9ÁÉÍÓÚÑ]+/, '').trim();
   text = text.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
 
-  // 4. VERIFICACIÓN DE VALIDEZ DEL NOMBRE EXTRAÍDO (Evitar falsos positivos como títulos de casilla)
-  const invalidStarters = [
-    /^DOMICI?LIO\b/,
-    /^NO\s+DE\s+CLIENTE\b/,
-    /^CLIENTE\b/,
-    /^FOLIO\b/,
-    /^NUM\s+DE\s+REGISTRO\b/,
-    /^REGISTRO\s+AMBIENTAL\b/,
-    /^RAZON\s+SOCIAL\b/,
-    /^EMPRESA\s+GENERADORA\b/,
-    /^GENERADORA\b/
+  // 5. VALIDACIÓN DE NOMBRE REAL (Evitar que títulos de casillas vacías queden como nombre)
+  const invalidExactNames = [
+    'DOMICILIO', 'DOMICTLIO', 'DIRECCION',
+    'NO DE CLIENTE', 'CLIENTE', 'FOLIO', 'FOLIO B1',
+    'RAZON SOCIAL', 'EMPRESA GENERADORA', 'GENERADORA',
+    'NUM DE REGISTRO', 'REGISTRO AMBIENTAL'
   ];
 
-  for (const inv of invalidStarters) {
-    if (inv.test(text)) {
-      return null;
-    }
-  }
-
-  // Si solo quedaron dígitos, espacios o menos de 3 caracteres, asignar EMPRESA_NO_DETECTADA (null)
-  if (text.length < 3 || /^[\d\s]+$/.test(text)) {
+  if (invalidExactNames.includes(text) || text.length < 3 || /^[\d\s]+$/.test(text)) {
     return null;
   }
 
-  // 5. RESTRICCIÓN DE LONGITUD MÁXIMA (<= 60 caracteres)
+  // 6. RESTRICCIÓN DE LONGITUD MÁXIMA (<= 60 caracteres)
   if (text.length > 60) {
     text = text.substring(0, 60).trim();
   }
@@ -167,33 +167,29 @@ function sanitizeCompanyName(name) {
 }
 
 /**
- * Función de extracción flexible y limpieza de Razón Social
- * Soporta variantes: "4.- RAZON SOCIAL...", "RAZON SOCIAL:", "EMPRESA GENERADORA:"
+ * Función de extracción flexible y definitiva de Razón Social
+ * Regla: Captura todo lo que esté a la DERECHA de frases como:
+ * "RAZON SOCIAL DE LA EMPRESA GENERADORA:", "RAZON SOCIAL:", o "GENERADORA:".
+ * No borra la línea completa, solo toma lo que sigue a la derecha.
  */
 function extractAndCleanRazonSocial(rawText) {
   if (!rawText) return null;
 
   const normalized = rawText.replace(/\r?\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-  // 1. Regla RegEx flexible para prefijo (incluye prefijo numérico opcional 4.- o 4-)
-  const prefixRegex = /(?:4\s*[\.\-]*\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA)\s*[:.-]?\s*/i;
-  const prefixMatch = normalized.match(prefixRegex);
+  // 1. Extracción flexible: Todo lo que esté a la DERECHA del prefijo
+  const prefixRegex = /(?:4\s*[\.\-]*\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA)\s*[:.-]?\s*/i;
+  const match = normalized.match(prefixRegex);
 
   let candidate = '';
-  if (prefixMatch) {
-    candidate = normalized.slice(prefixMatch.index + prefixMatch[0].length).trim();
+  if (match) {
+    candidate = normalized.slice(match.index + match[0].length).trim();
   } else {
+    // Si no contiene el prefijo exacto, evaluar el texto para no descartar empresas
     candidate = normalized;
   }
 
-  // 2. Delimitadores estándar posteriores en el formulario de manifiesto
-  const stopRegex = /\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|RFC\b|C\.?P\.?|TEL[EÉ]FONO|N[UÚ]MERO|AUTORIZACI[OÓ]N)\b\s*[:.-]?/i;
-  const stopMatch = candidate.match(stopRegex);
-  if (stopMatch && stopMatch.index > 0) {
-    candidate = candidate.slice(0, stopMatch.index).trim();
-  }
-
-  // 3. Sanitizar, corregir ortografía, filtrar títulos impresos y acotar longitud
+  // 2. Sanitizar, hacer corte seguro en DOMICILIO, normalizar marcas y eliminar sufijos de página
   return sanitizeCompanyName(candidate);
 }
 
@@ -475,6 +471,22 @@ async function processWithPdfCo(job, tempFilePath, originalName, apiKey) {
   const archive = createArchiveInstance();
   archive.pipe(zipOutputStream);
 
+  const usedFileNames = new Set();
+  const fileNameCounts = new Map();
+
+  function getUniquePdfFileName(baseName) {
+    let fileName = `${baseName}.pdf`;
+    if (usedFileNames.has(fileName)) {
+      const count = (fileNameCounts.get(baseName) || 1) + 1;
+      fileNameCounts.set(baseName, count);
+      fileName = `${baseName} (${count}).pdf`;
+    } else {
+      fileNameCounts.set(baseName, 1);
+      usedFileNames.add(fileName);
+    }
+    return fileName;
+  }
+
   // Paso 4: Procesamiento OCR en lotes pequeños (3 páginas a la vez)
   job.status = 'ocr';
   const BATCH_SIZE = 3;
@@ -515,9 +527,8 @@ async function processWithPdfCo(job, tempFilePath, originalName, apiKey) {
         }
 
         const razonSocial = extractAndCleanRazonSocial(ocrText);
-        const fileName = razonSocial
-          ? `${razonSocial}_${consecutive}.pdf`
-          : `EMPRESA_NO_DETECTADA_${consecutive}.pdf`;
+        const baseName = razonSocial || 'EMPRESA_NO_DETECTADA';
+        const fileName = getUniquePdfFileName(baseName);
 
         // Descarga directa del archivo de página para añadirlo al ZIP
         const pagePdfRes = await fetch(pageUrl);
@@ -599,6 +610,22 @@ async function processLocalFallback(job, tempFilePath, apiKey = '', originalName
   const BATCH_SIZE = 3;
   const generatedFiles = [];
 
+  const usedFileNames = new Set();
+  const fileNameCounts = new Map();
+
+  function getUniquePdfFileName(baseName) {
+    let fileName = `${baseName}.pdf`;
+    if (usedFileNames.has(fileName)) {
+      const count = (fileNameCounts.get(baseName) || 1) + 1;
+      fileNameCounts.set(baseName, count);
+      fileName = `${baseName} (${count}).pdf`;
+    } else {
+      fileNameCounts.set(baseName, 1);
+      usedFileNames.add(fileName);
+    }
+    return fileName;
+  }
+
   for (let i = 0; i < totalPages; i += BATCH_SIZE) {
     const end = Math.min(i + BATCH_SIZE, totalPages);
     job.message = `Dividiendo páginas ${i + 1} a ${end} de ${totalPages}...`;
@@ -611,8 +638,8 @@ async function processLocalFallback(job, tempFilePath, apiKey = '', originalName
       singlePageDoc.addPage(copiedPage);
       const singleBytes = await singlePageDoc.save();
 
-      // En fallback local sin OCR externo, nombramos con consecutivo
-      const fileName = `EMPRESA_NO_DETECTADA_${consecutive}.pdf`;
+      // Nombramiento seguro sin sufijo de página
+      const fileName = getUniquePdfFileName('EMPRESA_NO_DETECTADA');
       archive.append(Buffer.from(singleBytes), { name: fileName });
 
       generatedFiles.push({
