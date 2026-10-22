@@ -110,47 +110,181 @@ function createArchiveInstance() {
 }
 
 /**
+ * 1. CONTADOR DE PÁGINAS SEGURO (Flujos asíncronos, chunks y fallback remoto a PDF.co)
+ * - Maneja PDFs escaneados y de gran tamaño leyendo en flujos asíncronos y chunks (64KB).
+ * - Si la librería local (pdf-lib) falla al abrir el archivo debido a su peso,
+ *   delega el conteo directamente a la API de PDF.co mediante su lectura remota (/v1/pdf/info).
+ */
+async function countPdfPages({ tempFilePath, apiKey = '', cloudFileUrl = null, originalName = 'document.pdf' }) {
+  console.log(`[Contador de Páginas] Iniciando conteo seguro para: ${originalName || path.basename(tempFilePath)}`);
+
+  let localError = null;
+
+  // Paso 1: Intento de conteo local seguro usando flujos asíncronos por chunks
+  try {
+    const fileStats = await fs.promises.stat(tempFilePath);
+    console.log(`[Contador de Páginas] Peso del archivo: ${(fileStats.size / (1024 * 1024)).toFixed(2)} MB`);
+
+    // Cargar búfer por partes (chunks) con flujo asíncrono para proteger el consumo de RAM
+    const chunks = [];
+    const readStream = fs.createReadStream(tempFilePath, { highWaterMark: 64 * 1024 });
+    for await (const chunk of readStream) {
+      chunks.push(chunk);
+    }
+    const fileBuffer = Buffer.concat(chunks);
+
+    // Intento con la librería local pdf-lib
+    const pdfDoc = await PDFDocument.load(fileBuffer, {
+      ignoreEncryption: true,
+      updateMetadata: false
+    });
+    const pageCount = pdfDoc.getPageCount();
+
+    if (typeof pageCount === 'number' && pageCount > 0) {
+      console.log(`[Contador de Páginas] Librería local contó exitosamente ${pageCount} páginas.`);
+      return { pageCount, cloudFileUrl, delegatedToRemote: false };
+    }
+  } catch (err) {
+    localError = err;
+    console.warn(`[Contador de Páginas] Librería local falló al abrir el archivo debido a su peso/estructura (${err.message}). Delegando conteo nativo a PDF.co...`);
+  }
+
+  // Paso 2: Delegación a la API de PDF.co con función nativa de lectura remota (/v1/pdf/info)
+  const effectiveKey = (apiKey && apiKey.trim()) || process.env.PDFCO_API_KEY;
+  if (!effectiveKey || effectiveKey.trim() === '') {
+    if (localError) {
+      throw new Error(`Fallo de lectura local (${localError.message}) y no se proporcionó clave de PDF.co para delegar lectura remota.`);
+    }
+    throw new Error('No se detectaron páginas en el documento.');
+  }
+
+  const key = effectiveKey.trim();
+  let remoteFileUrl = cloudFileUrl;
+
+  // Si el archivo aún no ha sido subido a PDF.co, transmitir por flujo (Stream) sin saturar RAM
+  if (!remoteFileUrl) {
+    console.log('[Contador de Páginas] Transmitiendo archivo a PDF.co mediante streams para lectura remota...');
+    const fileStats = await fs.promises.stat(tempFilePath);
+    const presignedRes = await fetch(
+      `https://api.pdf.co/v1/file/upload/get-presigned-url?name=${encodeURIComponent(originalName || 'document.pdf')}`,
+      { headers: { 'x-api-key': key } }
+    );
+    const presignedData = await presignedRes.json();
+    if (presignedData.error) {
+      throw new Error(`PDF.co (Carga para info remota): ${presignedData.message}`);
+    }
+
+    remoteFileUrl = presignedData.url;
+
+    const fileStream = fs.createReadStream(tempFilePath);
+    const uploadRes = await fetch(presignedData.presignedUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Length': fileStats.size.toString()
+      },
+      body: fileStream,
+      duplex: 'half'
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error(`Fallo en la transmisión a PDF.co para lectura remota (HTTP ${uploadRes.status})`);
+    }
+  }
+
+  // Consulta nativa remota en PDF.co: POST /v1/pdf/info
+  console.log('[Contador de Páginas] Consultando función nativa de lectura remota en PDF.co (/v1/pdf/info)...');
+  const infoRes = await fetch('https://api.pdf.co/v1/pdf/info', {
+    method: 'POST',
+    headers: {
+      'x-api-key': key,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      url: remoteFileUrl,
+      async: false
+    })
+  });
+
+  const infoData = await infoRes.json();
+  if (infoData.error) {
+    throw new Error(`PDF.co (Lectura remota /pdf/info): ${infoData.message}`);
+  }
+
+  const remotePageCount = (infoData.info && typeof infoData.info.PageCount === 'number')
+    ? infoData.info.PageCount
+    : (typeof infoData.pageCount === 'number' ? infoData.pageCount : 0);
+
+  console.log(`[Contador de Páginas] Función nativa de PDF.co reportó ${remotePageCount} páginas.`);
+
+  if (remotePageCount === 0) {
+    throw new Error('No se detectaron páginas en el documento.');
+  }
+
+  return { pageCount: remotePageCount, cloudFileUrl: remoteFileUrl, delegatedToRemote: true };
+}
+
+/**
  * 2. PROCESAMIENTO CLOUD OCR CON PDF.CO (Streaming & Batching)
  */
 async function processWithPdfCo(job, tempFilePath, originalName, apiKey) {
   const fileStats = await fs.promises.stat(tempFilePath);
 
-  // Paso 1: Obtener URL prefirmada para carga segura vía Stream sin cargar en RAM
-  job.status = 'uploading';
-  job.progress = 10;
-  job.message = 'Transmitiendo archivo a la nube mediante streams seguros...';
+  // Paso 1: Contador seguro de páginas (flujos asíncronos / chunks / delegación nativa a PDF.co)
+  job.status = 'analyzing';
+  job.progress = 8;
+  job.message = 'Analizando y contando páginas del documento de forma segura...';
 
-  const presignedRes = await fetch(
-    `https://api.pdf.co/v1/file/upload/get-presigned-url?name=${encodeURIComponent(originalName)}`,
-    { headers: { 'x-api-key': apiKey } }
-  );
-  const presignedData = await presignedRes.json();
-  if (presignedData.error) {
-    throw new Error(`PDF.co (Carga): ${presignedData.message}`);
-  }
-
-  const { presignedUrl, url: cloudFileUrl } = presignedData;
-
-  // Carga binaria directa por flujo (Stream)
-  const fileStream = fs.createReadStream(tempFilePath);
-  const uploadRes = await fetch(presignedUrl, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/pdf',
-      'Content-Length': fileStats.size.toString()
-    },
-    body: fileStream,
-    duplex: 'half'
+  const countResult = await countPdfPages({
+    tempFilePath,
+    apiKey,
+    originalName
   });
 
-  if (!uploadRes.ok) {
-    throw new Error(`Fallo en la carga a la nube (Código HTTP ${uploadRes.status})`);
+  const detectedPages = countResult.pageCount;
+  job.totalPages = detectedPages;
+  let cloudFileUrl = countResult.cloudFileUrl;
+
+  job.message = `Documento analizado: ${detectedPages} páginas detectadas. Preparando transmisión...`;
+
+  // Transmitir a la nube si no se transmitió previamente durante la delegación remota
+  if (!cloudFileUrl) {
+    job.status = 'uploading';
+    job.progress = 15;
+    job.message = 'Transmitiendo archivo a la nube mediante streams seguros...';
+
+    const presignedRes = await fetch(
+      `https://api.pdf.co/v1/file/upload/get-presigned-url?name=${encodeURIComponent(originalName)}`,
+      { headers: { 'x-api-key': apiKey } }
+    );
+    const presignedData = await presignedRes.json();
+    if (presignedData.error) {
+      throw new Error(`PDF.co (Carga): ${presignedData.message}`);
+    }
+
+    const { presignedUrl, url } = presignedData;
+    cloudFileUrl = url;
+
+    const fileStream = fs.createReadStream(tempFilePath);
+    const uploadRes = await fetch(presignedUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Length': fileStats.size.toString()
+      },
+      body: fileStream,
+      duplex: 'half'
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error(`Fallo en la carga a la nube (Código HTTP ${uploadRes.status})`);
+    }
   }
 
   // Paso 2: División de páginas en la nube mediante PDF.co (pages: "*")
   job.status = 'splitting';
   job.progress = 25;
-  job.message = 'Dividiendo documento en páginas individuales en la nube...';
+  job.message = `Dividiendo documento (${detectedPages} páginas) en páginas individuales en la nube...`;
 
   const splitRes = await fetch('https://api.pdf.co/v1/pdf/split', {
     method: 'POST',
@@ -171,28 +305,61 @@ async function processWithPdfCo(job, tempFilePath, originalName, apiKey) {
   }
 
   // Esperar a que el trabajo asíncrono de división termine en PDF.co
-  const splitJobId = splitData.jobId;
   let splitResult = null;
-  while (!splitResult) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const checkRes = await fetch('https://api.pdf.co/v1/job/check', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ jobId: splitJobId })
-    });
-    const checkData = await checkRes.json();
-    if (checkData.status === 'success') {
-      splitResult = checkData;
-    } else if (checkData.status === 'failed') {
-      throw new Error(`PDF.co (División fallida): ${checkData.message}`);
+  if (splitData.jobId) {
+    const splitJobId = splitData.jobId;
+    while (!splitResult) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const checkRes = await fetch('https://api.pdf.co/v1/job/check', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ jobId: splitJobId })
+      });
+      const checkData = await checkRes.json();
+      if (checkData.status === 'success') {
+        splitResult = checkData;
+      } else if (checkData.status === 'failed') {
+        throw new Error(`PDF.co (División fallida): ${checkData.message}`);
+      }
     }
+  } else {
+    splitResult = splitData;
   }
 
-  const pageUrls = splitResult.urls || [];
-  const totalPages = pageUrls.length;
+  // Extracción robusta de las URLs de páginas individuales
+  // (Soporta array 'urls', enlace remoto 'result.json' para PDFs grandes de 45MB+, o string)
+  let pageUrls = [];
+  if (Array.isArray(splitResult.urls) && splitResult.urls.length > 0) {
+    pageUrls = splitResult.urls;
+  } else if (typeof splitResult.url === 'string' && splitResult.url.length > 0) {
+    if (splitResult.url.toLowerCase().includes('.json')) {
+      try {
+        console.log(`[PDF.co Split] Obteniendo lista de páginas desde enlace JSON remoto: ${splitResult.url}`);
+        const jsonRes = await fetch(splitResult.url);
+        const jsonData = await jsonRes.json();
+        if (Array.isArray(jsonData)) {
+          pageUrls = jsonData;
+        } else if (jsonData && Array.isArray(jsonData.urls)) {
+          pageUrls = jsonData.urls;
+        } else if (jsonData && typeof jsonData.url === 'string') {
+          pageUrls = [jsonData.url];
+        }
+      } catch (jsonErr) {
+        console.warn('[PDF.co Split] Error al descargar result.json:', jsonErr.message);
+      }
+    } else {
+      pageUrls = [splitResult.url];
+    }
+  } else if (typeof splitResult.urls === 'string' && splitResult.urls.length > 0) {
+    pageUrls = splitResult.urls.split(',').map((u) => u.trim());
+  }
+
+  pageUrls = pageUrls.map((item) => (typeof item === 'string' ? item : item?.url || item)).filter(Boolean);
+
+  const totalPages = pageUrls.length || detectedPages;
   job.totalPages = totalPages;
 
   if (totalPages === 0) {
@@ -289,15 +456,37 @@ async function processWithPdfCo(job, tempFilePath, originalName, apiKey) {
 /**
  * PROCESAMIENTO LOCAL POR LOTES (Fallback ligero si no se cuenta con API Key externa)
  */
-async function processLocalFallback(job, tempFilePath) {
-  job.status = 'splitting';
-  job.progress = 20;
-  job.message = 'Leyendo estructura del archivo PDF en disco...';
+async function processLocalFallback(job, tempFilePath, apiKey = '', originalName = 'document.pdf') {
+  job.status = 'analyzing';
+  job.progress = 15;
+  job.message = 'Contando páginas del documento de forma segura...';
 
-  const fileBytes = await fs.promises.readFile(tempFilePath);
-  const mainPdfDoc = await PDFDocument.load(fileBytes);
-  const totalPages = mainPdfDoc.getPageCount();
+  // Usar el contador seguro de páginas con flujos asíncronos y chunks
+  const countResult = await countPdfPages({
+    tempFilePath,
+    apiKey,
+    originalName
+  });
+
+  const totalPages = countResult.pageCount;
   job.totalPages = totalPages;
+
+  if (totalPages === 0) {
+    throw new Error('No se detectaron páginas en el documento.');
+  }
+
+  job.status = 'splitting';
+  job.progress = 25;
+  job.message = `Leyendo estructura de ${totalPages} páginas en disco por chunks...`;
+
+  // Carga segura del búfer por partes (chunks) usando flujos asíncronos
+  const chunks = [];
+  const readStream = fs.createReadStream(tempFilePath, { highWaterMark: 64 * 1024 });
+  for await (const chunk of readStream) {
+    chunks.push(chunk);
+  }
+  const fileBytes = Buffer.concat(chunks);
+  const mainPdfDoc = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
 
   const zipPath = path.join(uploadDir, `bundle-${job.id}.zip`);
   const zipOutputStream = fs.createWriteStream(zipPath);
@@ -310,7 +499,7 @@ async function processLocalFallback(job, tempFilePath) {
   for (let i = 0; i < totalPages; i += BATCH_SIZE) {
     const end = Math.min(i + BATCH_SIZE, totalPages);
     job.message = `Dividiendo páginas ${i + 1} a ${end} de ${totalPages}...`;
-    job.progress = Math.round(20 + ((i / totalPages) * 70));
+    job.progress = Math.round(25 + ((i / totalPages) * 65));
 
     for (let pageIndex = i; pageIndex < end; pageIndex++) {
       const consecutive = pageIndex + 1;
@@ -361,7 +550,7 @@ async function runJobInBackground(jobId, tempFilePath, originalName, apiKey) {
       await processWithPdfCo(job, tempFilePath, originalName, key.trim());
     } else {
       console.log(`[Job ${jobId}] Sin clave PDF.co. Ejecutando división local en lotes...`);
-      await processLocalFallback(job, tempFilePath);
+      await processLocalFallback(job, tempFilePath, key, originalName);
     }
   } catch (error) {
     console.error(`[Job ${jobId}] Error en proceso:`, error);
@@ -471,3 +660,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Límite de subida: 250 MB | Render Timeout Safe`);
   console.log(`=======================================================`);
 });
+
+export { app, countPdfPages, processWithPdfCo, processLocalFallback };
