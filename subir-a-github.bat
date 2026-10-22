@@ -2,9 +2,9 @@
 title Subir codigo a GitHub
 echo =======================================================
 echo Subiendo repositorio a GitHub:
-echo https://github.com/nestot200488-a11y/separdor-manofiestos.git
+echo https://github.com/nestot200488-a11y/separador-manifiestos.git
 echo =======================================================
-"C:\Users\Usuario1\.mingit\cmd\git.exe" push -u origin main
+"C:\Users\Usuario1\.mingit\cmd\git.exe" push -u origin main --force
 echo.
 if %errorlevel% neq 0 (
   echo -----------------------------------------------------

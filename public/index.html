@@ -43,7 +43,7 @@
 
     .container {
       width: 100%;
-      max-width: 640px;
+      max-width: 660px;
     }
 
     .header {
@@ -79,7 +79,7 @@
     .file-dropzone {
       border: 2px dashed #cbd5e1;
       border-radius: var(--radius);
-      padding: 40px 24px;
+      padding: 36px 24px;
       text-align: center;
       cursor: pointer;
       transition: all 0.2s ease;
@@ -103,8 +103,8 @@
     }
 
     .file-icon {
-      width: 52px;
-      height: 52px;
+      width: 48px;
+      height: 48px;
       margin: 0 auto 12px;
       color: var(--primary);
     }
@@ -139,6 +139,41 @@
       display: flex;
     }
 
+    /* Optional API Key section */
+    .api-key-container {
+      background: #f8fafc;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .api-key-label {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .api-key-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 0.88rem;
+      font-family: inherit;
+    }
+
+    .api-key-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+    }
+
     /* Action Button */
     .btn-action {
       background: var(--primary);
@@ -170,6 +205,52 @@
       cursor: not-allowed;
     }
 
+    /* 3. Real Progress Bar (Asynchronous) */
+    .progress-section {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      background: #f1f5f9;
+      border-radius: 10px;
+      padding: 16px;
+      border: 1px solid var(--border-color);
+    }
+
+    .progress-section.active {
+      display: flex;
+    }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 12px;
+      background: #cbd5e1;
+      border-radius: 6px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      border-radius: 6px;
+      transition: width 0.4s ease;
+    }
+
+    .progress-status-text {
+      font-size: 0.84rem;
+      color: var(--text-muted);
+      line-height: 1.3;
+    }
+
     /* Large Download Button (Requirement 3) */
     .btn-download-large {
       display: none;
@@ -189,7 +270,6 @@
       justify-content: center;
       gap: 12px;
       width: 100%;
-      margin-top: 8px;
     }
 
     .btn-download-large.active {
@@ -200,21 +280,6 @@
       background: var(--success-hover);
       transform: translateY(-2px);
       box-shadow: 0 6px 16px rgba(22, 163, 74, 0.35);
-    }
-
-    /* Loading Spinner */
-    .spinner {
-      display: none;
-      width: 22px;
-      height: 22px;
-      border: 3px solid rgba(255, 255, 255, 0.3);
-      border-radius: 50%;
-      border-top-color: #fff;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
     }
 
     /* Status Notifications */
@@ -345,10 +410,10 @@
   <div class="container">
     <div class="header">
       <h1>Procesamiento de Manifiestos</h1>
-      <p>División dinámica por página, OCR y descarga de paquete .ZIP</p>
+      <p>División por flujos, Cloud OCR y descarga empaquetada .ZIP</p>
     </div>
 
-    <!-- Panel Principal según especificación exacta -->
+    <!-- Panel Principal -->
     <div class="card">
       
       <!-- Componente de carga de archivos (File Uploader) exclusivamente .pdf -->
@@ -358,7 +423,7 @@
             d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
         </svg>
         <div class="file-label">Selecciona o arrastra tu archivo PDF</div>
-        <div class="file-hint">Formato admitido: exclusivamente archivos con formato .pdf</div>
+        <div class="file-hint">Formato admitido: exclusivamente archivos .pdf (hasta 250MB)</div>
         <input type="file" id="manifestPdf" accept=".pdf" />
       </div>
 
@@ -369,16 +434,36 @@
         <span id="fileNameDisplay"></span>
       </div>
 
+      <!-- Configuración opcional de clave API PDF.co -->
+      <div class="api-key-container" id="apiKeyContainer">
+        <div class="api-key-label">
+          <span>Clave API PDF.co (Para OCR en la Nube):</span>
+          <span id="apiKeyStatus" style="color: #64748b; font-weight: normal;">Opcional si configurada en Render</span>
+        </div>
+        <input type="password" id="apiKeyInput" class="api-key-input" placeholder="Ingresa tu clave de PDF.co (o déjala vacía si está en el servidor)" />
+      </div>
+
       <!-- Botón de acción con el texto exacto requerido -->
       <button type="button" class="btn-action" id="btnProcess" disabled>
-        <div class="spinner" id="spinner"></div>
         <span id="btnText">Procesar Manifiesto</span>
       </button>
+
+      <!-- 3. Barra de carga en tiempo real (Procesamiento Asíncrono) -->
+      <div class="progress-section" id="progressSection">
+        <div class="progress-header">
+          <span id="progressTitle">Procesando documento...</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="progressBarFill"></div>
+        </div>
+        <div class="progress-status-text" id="progressStatusText">Iniciando conexión con el servidor...</div>
+      </div>
 
       <!-- Mensajes de estado -->
       <div class="status-box" id="statusBox"></div>
 
-      <!-- Botón grande para Descargar archivos procesados (.ZIP) (Requisito 3) -->
+      <!-- Botón grande para Descargar archivos procesados (.ZIP) -->
       <a href="#" class="btn-download-large" id="btnDownloadZip">
         <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" 
@@ -405,9 +490,14 @@
     const dropzone = document.getElementById('dropzone');
     const fileInfo = document.getElementById('fileInfo');
     const fileNameDisplay = document.getElementById('fileNameDisplay');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const apiKeyStatus = document.getElementById('apiKeyStatus');
     const btnProcess = document.getElementById('btnProcess');
     const btnText = document.getElementById('btnText');
-    const spinner = document.getElementById('spinner');
+    const progressSection = document.getElementById('progressSection');
+    const progressBarFill = document.getElementById('progressBarFill');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressStatusText = document.getElementById('progressStatusText');
     const statusBox = document.getElementById('statusBox');
     const btnDownloadZip = document.getElementById('btnDownloadZip');
     const resultsContainer = document.getElementById('resultsContainer');
@@ -415,6 +505,28 @@
     const fileList = document.getElementById('fileList');
 
     let selectedFile = null;
+    let pollInterval = null;
+
+    // Cargar clave guardada en localStorage si existe
+    const savedKey = localStorage.getItem('pdfco_api_key');
+    if (savedKey) {
+      apiKeyInput.value = savedKey;
+    }
+
+    apiKeyInput.addEventListener('input', () => {
+      localStorage.setItem('pdfco_api_key', apiKeyInput.value.trim());
+    });
+
+    // Consultar si el servidor ya tiene la clave configurada en Render
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(data => {
+        if (data.hasServerApiKey) {
+          apiKeyStatus.textContent = '✔ Configurada en Render (Variable PDFCO_API_KEY)';
+          apiKeyStatus.style.color = '#16a34a';
+        }
+      })
+      .catch(() => {});
 
     // Manejo de drag and drop
     ['dragenter', 'dragover'].forEach(eventName => {
@@ -455,6 +567,7 @@
       fileInfo.classList.add('active');
       btnProcess.disabled = false;
       btnDownloadZip.classList.remove('active');
+      progressSection.classList.remove('active');
       hideStatus();
       resultsContainer.classList.remove('active');
     }
@@ -476,53 +589,105 @@
       statusBox.className = 'status-box';
     }
 
+    function updateProgress(percent, message) {
+      progressBarFill.style.width = `${percent}%`;
+      progressPercent.textContent = `${percent}%`;
+      progressStatusText.textContent = message;
+    }
+
     // Acción al presionar "Procesar Manifiesto"
     btnProcess.addEventListener('click', async () => {
       if (!selectedFile) return;
 
       btnProcess.disabled = true;
-      spinner.style.display = 'inline-block';
-      btnText.textContent = 'Procesando en la nube... Por favor espere';
-      showStatus('Contando páginas, ejecutando OCR en memoria y empaquetando el archivo ZIP...', 'info');
+      btnText.textContent = 'Enviando archivo...';
+      hideStatus();
       btnDownloadZip.classList.remove('active');
       resultsContainer.classList.remove('active');
 
+      // Activar barra de progreso
+      progressSection.classList.add('active');
+      updateProgress(5, 'Subiendo archivo al servidor en disco temporal (Streams)...');
+
       const formData = new FormData();
       formData.append('manifestPdf', selectedFile);
+      if (apiKeyInput.value.trim()) {
+        formData.append('apiKey', apiKeyInput.value.trim());
+      }
 
       try {
+        // 3. Inicio del proceso asíncrono
         const response = await fetch('/api/process-manifest', {
           method: 'POST',
           body: formData
         });
 
         const data = await response.json();
-
         if (!response.ok || data.error) {
-          throw new Error(data.error || 'Ocurrió un error en el servidor al procesar el archivo.');
+          throw new Error(data.error || 'Ocurrió un error en el servidor.');
         }
 
-        showStatus(`¡Procesamiento exitoso! Se procesaron dinámicamente ${data.totalPages} páginas. Ya puedes descargar tu archivo comprimido.`, 'success');
-        
-        // Configurar y mostrar el botón grande de descarga
-        btnDownloadZip.href = `/api/download-zip/${data.downloadId}`;
-        btnDownloadZip.classList.add('active');
+        const jobId = data.jobId;
+        btnText.textContent = 'Procesando en segundo plano...';
+        updateProgress(15, 'Documento en cola. Iniciando división y OCR...');
 
-        renderResults(data);
+        // Iniciar sondeo (Polling) periódico del progreso
+        startPollingJobStatus(jobId);
+
       } catch (err) {
-        showStatus('Error al procesar: ' + err.message, 'error');
-      } finally {
+        showStatus('Error al iniciar procesamiento: ' + err.message, 'error');
         btnProcess.disabled = false;
-        spinner.style.display = 'none';
         btnText.textContent = 'Procesar Manifiesto';
+        progressSection.classList.remove('active');
       }
     });
 
-    function renderResults(data) {
-      badgeTotal.textContent = `${data.totalPages} página(s)`;
+    function startPollingJobStatus(jobId) {
+      if (pollInterval) clearInterval(pollInterval);
+
+      pollInterval = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/job-status/${jobId}`);
+          if (!res.ok) {
+            throw new Error('No se pudo verificar el estado del trabajo.');
+          }
+
+          const job = await res.json();
+
+          // Actualizar barra de progreso con datos reales del backend
+          updateProgress(job.progress || 0, job.message || 'Procesando...');
+
+          if (job.status === 'completed') {
+            clearInterval(pollInterval);
+            pollInterval = null;
+            btnProcess.disabled = false;
+            btnText.textContent = 'Procesar Manifiesto';
+
+            showStatus(`¡Procesamiento finalizado! Se procesaron ${job.totalPages} páginas sin sobrecargar la memoria.`, 'success');
+            
+            // Mostrar botón grande de descarga
+            btnDownloadZip.href = `/api/download-zip/${job.id}`;
+            btnDownloadZip.classList.add('active');
+
+            renderResults(job);
+          } else if (job.status === 'error') {
+            clearInterval(pollInterval);
+            pollInterval = null;
+            btnProcess.disabled = false;
+            btnText.textContent = 'Procesar Manifiesto';
+            showStatus('Error durante el procesamiento: ' + (job.error || job.message), 'error');
+          }
+        } catch (pollErr) {
+          console.warn('Error en sondeo:', pollErr);
+        }
+      }, 1500);
+    }
+
+    function renderResults(job) {
+      badgeTotal.textContent = `${job.totalPages} página(s)`;
       fileList.innerHTML = '';
 
-      data.files.forEach(file => {
+      (job.files || []).forEach(file => {
         const li = document.createElement('li');
         li.className = 'file-item';
 
