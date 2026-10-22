@@ -104,6 +104,45 @@ const BRAND_DEFINITIONS = [
 ];
 
 /**
+ * Diccionario de Corrección Antirruido (Limpieza de I por T / L y errores típicos de escaneo OCR):
+ * - "TNDUSTRTAS" o "INDUSTRIAS" mal leídas -> "INDUSTRIAS"
+ * - "VTCENTE" -> "VICENTE"
+ * - "CONSTTTUCTON" -> "CONSTITUCION"
+ * - "HTMNO NACTONAL" -> "HIMNO NACIONAL"
+ * - "CRUPO" o "CNUPO" -> "GRUPO"
+ * - "OHG¡LÓSJTCO" -> "LOGISTICO"
+ * - Remueve cualquier símbolo extraño o letra suelta al final (como "TAE¡UL", "PG ¡A-", etc.)
+ */
+function applyAntiNoiseCorrections(text) {
+  if (!text) return '';
+  let str = text;
+
+  // 1. Remoción temprana de basura de escaneo y símbolos sueltos al final (ej: "TAE¡UL", "PG ¡A-")
+  str = str.replace(/\s+(?:TAE[¡!íIlA-]*UL|PG[\s¡!íIlA\-]*).*$/i, '');
+
+  // 2. Correcciones de palabras OCR mal reconocidas
+  str = str.replace(/\bTNDUSTR[TI]AS?\b/gi, 'INDUSTRIAS');
+  str = str.replace(/\bTNDUSTRIAS?\b/gi, 'INDUSTRIAS');
+  str = str.replace(/\bVTCENTE\b/gi, 'VICENTE');
+  str = str.replace(/\bCONST[TI]TUC[TI]ON\b/gi, 'CONSTITUCION');
+  str = str.replace(/\bHTMNO\b/gi, 'HIMNO');
+  str = str.replace(/\bNACTONAL\b/gi, 'NACIONAL');
+  str = str.replace(/\b(?:CRUPO|CNUPO)\b/gi, 'GRUPO');
+
+  // "OHG¡LÓSJTCO" -> "LOGISTICO"
+  str = str.replace(/\bOHG[¡!íl\s]*L[OÓ]SJTCO\b/gi, 'LOGISTICO');
+  str = str.replace(/OHG[¡!íl\s]*L[OÓ]SJTCO/gi, 'LOGISTICO');
+
+  // Limpiar caracteres de ruido OCR como signos de exclamación invertidos, tildes raras
+  str = str.replace(/[¡!¿?~^&*$%@#+=/|\\]+/g, ' ');
+
+  // Limpiar dobles espacios producidos por los reemplazos
+  str = str.replace(/\s{2,}/g, ' ').trim();
+
+  return str;
+}
+
+/**
  * Limpieza interna del renglón detectado (Línea 4):
  * - Remueve comas sueltas y caracteres especiales ilegales de Windows.
  * - Conserva paréntesis, acentos y letras como la Ñ (ej: MUÑOZ (SAPM)).
@@ -133,6 +172,13 @@ function cleanSingleLineText(text) {
   // Limpieza de casillas SEMARNAT mezcladas
   str = str.replace(/(?:1\s*[\.\-]*\s*)?N[UÚ]M\.?\s*DE\s*REGISTRO(?:\s+AMBIENTAL)?\s*[:.-]?\s*[\w\-/]*/gi, ' ').trim();
   str = str.replace(/\bN\.?R\.?A\.?\s*[:.-]?\s*[\w\-/]*/gi, ' ').trim();
+
+  // Limpiar residuos del título de casilla 4 si quedaron al inicio
+  str = str.replace(/^(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA\b)\s*[:.-]*\s*/gi, '').trim();
+  str = str.replace(/^DE\s+LA\s+EMPRESA(?:\s+GENERADORA)?\s*[:.-]*\s*/gi, '').trim();
+
+  // Aplicar corrección antirruido de palabras OCR
+  str = applyAntiNoiseCorrections(str);
 
   // Eliminar caracteres prohibidos en nombres de archivo de Windows: \ / : * ? " < > |
   // y caracteres de puntuación como comas intermedias/sueltas, puntos (convierte S.A. a SA)
@@ -172,6 +218,9 @@ function applyBrandDictionaryToLine(line) {
         if (domMatch) {
           rawSuffix = rawSuffix.substring(0, domMatch.index);
         }
+
+        // Aplicar corrección antirruido al texto de la sucursal
+        rawSuffix = applyAntiNoiseCorrections(rawSuffix);
 
         // Limpieza de caracteres de puntuación (coma, punto, guion) y caracteres ilegales
         let suffix = rawSuffix.trim();
@@ -242,7 +291,8 @@ function sanitizeCompanyName(name, fullText = '') {
   let cleaned = cleanSingleLineText(line);
 
   const formatWordsRegex = /\b(?:GENERADORA|CLIENTE|DOMICILIO|DOMICTLIO|DIRECCION|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL|MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES)\b/i;
-  if (formatWordsRegex.test(cleaned) || cleaned.length < 4 || /^[\d\s]+$/.test(cleaned)) {
+  const invalidExact = /^(?:DE\s+LA\s+)?EMPRESA$/i;
+  if (formatWordsRegex.test(cleaned) || invalidExact.test(cleaned) || cleaned.length < 4 || /^[\d\s]+$/.test(cleaned)) {
     return checkBackupDictionary(fullText || name);
   }
 
@@ -255,46 +305,106 @@ function sanitizeCompanyName(name, fullText = '') {
 }
 
 /**
- * Función de extracción de Razón Social por regla de coincidencia exacta por renglón (Línea 4):
- * 1. CAPTURA EXCLUSIVA A LA DERECHA DE LOS DOS PUNTOS:
- *    Localiza la línea específica de la Casilla 4 de SEMARNAT y toma únicamente lo que está a la derecha de ':'.
- *    Se detiene antes de cualquier salto de línea '\n' o de la palabra 'DOMICILIO' (no lee renglones inferiores).
- * 2. LIMPIEZA INTERNA DEL RENGLÓN DETECTADO:
- *    Remueve espacios dobles y comas sueltas, conservando intacta la sucursal, ciudad o siglas (ej: "MUÑOZ (SAPM)").
- * 3. CONTROL DE ERRORES DE LECTURA (Reemplazo Inteligente):
- *    Estandariza marcas ("FARMACIAS DEL AHORRO", "FARMACIAS SIMILARES") unidas con la sucursal de esa misma línea.
+ * Función de extracción de Razón Social con Buscador Multinivel de Respaldo (Fallback):
+ * 
+ * 1. BUSCADOR MULTINIVEL (Rescate de líneas borrosas):
+ *    - Nivel 1 (Principal): Busca la línea con "4.- RAZON SOCIAL DE LA EMPRESA GENERADORA:" y toma lo que esté a la derecha de ':'.
+ *    - Nivel 2 (Respaldo 1): Si no la encuentra por el ruido visual, busca cualquier línea que contenga la palabra "GENERADORA" o "RAZON SOCIAL" de forma aislada.
+ *    - Nivel 3 (Respaldo 2): Si sigue sin encontrarla, busca "DOMICILIO:" y toma la línea justo ARRIBA de "DOMICILIO:", limpiando cualquier residuo del título.
+ *    - Nivel 4 (Seguridad): Coincidencia directa con marcas del diccionario en cualquier renglón.
+ * 
+ * 2. DICCIONARIO DE CORRECCIÓN ANTIRRUIDO:
+ *    - Limpieza de I por T / L, palabras deformadas (INDUSTRIAS, VICENTE, CONSTITUCION, HIMNO NACIONAL, GRUPO, LOGISTICO) y basura al final ("TAE¡UL", "PG ¡A-").
+ * 
+ * 3. UNIFICACIÓN DE MARCA:
+ *    - Estandariza "FARMACIAS DEL AHORRO" o "FARMACIAS SIMILARES" conectado con la sucursal o ciudad rescatada.
  */
 function extractAndCleanRazonSocial(rawText) {
   if (!rawText) return null;
 
   // Dividir el texto por líneas para evitar arrastrar líneas inferiores
-  const lines = rawText.split(/\r?\n+/);
-
-  // 1. CAPTURA EXCLUSIVA A LA DERECHA DE LOS DOS PUNTOS (Línea 4)
-  const box4HeaderRegex = /(?:(?:L[\s\-_]*)?4\s*[\.\-]+|L[\+\-]\s*|\)\s*[-_]?\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA\b)/i;
-
-  let line4 = null;
-  for (const line of lines) {
-    if (box4HeaderRegex.test(line)) {
-      line4 = line;
-      break;
-    }
-  }
+  const lines = rawText.split(/\r?\n+/).map(l => l.trim()).filter(Boolean);
 
   let capturedText = '';
 
-  if (line4) {
-    const headerMatch = box4HeaderRegex.exec(line4);
-    // Buscar específicamente los dos puntos ':' a la derecha del patrón de Casilla 4
-    const colonIndex = line4.indexOf(':', headerMatch.index);
-    if (colonIndex !== -1) {
-      capturedText = line4.slice(colonIndex + 1);
-    } else {
-      // Si la línea no contiene ':' capturar lo que sigue al encabezado en ese renglón
-      capturedText = line4.slice(headerMatch.index + headerMatch[0].length);
+  // -------------------------------------------------------------
+  // NIVEL 1 (Principal): Buscar "4.- RAZON SOCIAL DE LA EMPRESA GENERADORA:"
+  // -------------------------------------------------------------
+  const level1Regex = /(?:(?:L[\s\-_]*)?4\s*[\.\-]+\s*|L[\+\-]\s*|\)\s*[-_]?\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA)/i;
+
+  for (const line of lines) {
+    const match = level1Regex.exec(line);
+    if (match) {
+      const colonIdx = line.indexOf(':', match.index);
+      let cand = (colonIdx !== -1)
+        ? line.slice(colonIdx + 1).trim()
+        : line.slice(match.index + match[0].length).trim();
+
+      const domMatch = cand.match(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i);
+      if (domMatch) cand = cand.substring(0, domMatch.index).trim();
+
+      if (cand.length > 0) {
+        capturedText = cand;
+        break;
+      }
     }
-  } else {
-    // Si no localiza la cabecera explícita "4.- RAZON SOCIAL", buscar renglón que contenga alguna marca del diccionario
+  }
+
+  // -------------------------------------------------------------
+  // NIVEL 2 (Respaldo 1): Buscar "GENERADORA" o "RAZON SOCIAL" de forma aislada
+  // -------------------------------------------------------------
+  if (!capturedText) {
+    const level2Regex = /\b(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA\b)\b/i;
+
+    for (const line of lines) {
+      const match = level2Regex.exec(line);
+      if (match) {
+        const colonIdx = line.indexOf(':', match.index);
+        let cand = (colonIdx !== -1)
+          ? line.slice(colonIdx + 1).trim()
+          : line.slice(match.index + match[0].length).trim();
+
+        const domMatch = cand.match(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i);
+        if (domMatch) cand = cand.substring(0, domMatch.index).trim();
+
+        if (cand.length > 0) {
+          capturedText = cand;
+          break;
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // NIVEL 3 (Respaldo 2): Buscar "DOMICILIO:" y tomar la línea justo ARRIBA
+  // -------------------------------------------------------------
+  if (!capturedText) {
+    const domLineRegex = /\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i;
+
+    for (let i = 0; i < lines.length; i++) {
+      if (domLineRegex.test(lines[i])) {
+        if (i > 0) {
+          const lineAbove = lines[i - 1];
+          // Limpiar cualquier residuo del título que haya quedado (incluyendo abreviaciones como RAZ. SOC.)
+          let cand = lineAbove.replace(/^(?:(?:L[\s\-_]*)?4\s*[\.\-]+\s*|L[\+\-]\s*|\)\s*[-_]?\s*)?(?:RAZ(?:[OÓ]N)?[\s.]*SOC(?:IAL)?(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA\b)\s*[:.-]*\s*/gi, '').trim();
+          cand = cand.replace(/^[:.\-_]+\s*/, '').trim();
+
+          const domMatch = cand.match(domLineRegex);
+          if (domMatch) cand = cand.substring(0, domMatch.index).trim();
+
+          if (cand.length > 0) {
+            capturedText = cand;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // NIVEL 4 (Seguridad): Coincidencia directa con marcas del diccionario
+  // -------------------------------------------------------------
+  if (!capturedText) {
     for (const line of lines) {
       for (const brandDef of BRAND_DEFINITIONS) {
         if (brandDef.trigger.test(line)) {
@@ -330,7 +440,8 @@ function extractAndCleanRazonSocial(rawText) {
 
   // Validación de formato
   const formatWordsRegex = /\b(?:GENERADORA|CLIENTE|DOMICILIO|DOMICTLIO|DIRECCION|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL|MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES)\b/i;
-  if (formatWordsRegex.test(cleaned) || cleaned.length < 4 || /^[\d\s]+$/.test(cleaned)) {
+  const invalidExact = /^(?:DE\s+LA\s+)?EMPRESA$/i;
+  if (formatWordsRegex.test(cleaned) || invalidExact.test(cleaned) || cleaned.length < 4 || /^[\d\s]+$/.test(cleaned)) {
     return checkBackupDictionary(rawText);
   }
 
