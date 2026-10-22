@@ -73,22 +73,22 @@ setInterval(() => {
 const BRAND_DEFINITIONS = [
   {
     name: 'FARMACIAS DEL AHORRO',
-    regex: /(?:(?:FARMACIA\s*S?|FARMACTAS|FARMACAS)\s*)?(?:DEL\s*AHORRO|DELAHORRO|OER[\s\-_]*AHONNO|OER[\s\-_]*AHORRO|AHORRO|AHONNO)\b/i,
-    trigger: /\b(?:AHORRO|AHONNO|DELAHORRO|FARMACTAS|FARMACAS)\b/i
+    regex: /(?:(?:FARMACIA\s*S?|FARMACTAS|FARMACAS|FARMACIS)\s*)?(?:DEL\s*AHORRO|DELAHORRO|OER[\s\-_]*AHONNO|OER[\s\-_]*AHORRO|AHORRO|AHONNO)\b/i,
+    trigger: /\b(?:AHORRO|AHONNO|DELAHORRO|FARMACTAS|FARMACAS|FARMACIS)\b/i
   },
   {
     name: 'FARMACIAS SIMILARES',
-    regex: /(?:(?:FARMACIA\s*S?)\s*)?(?:SIMILARES)\b/i,
+    regex: /(?:(?:FARMACIA\s*S?|FARMACTAS|FARMACAS|FARMACIS)\s*)?(?:SIMILARES)\b/i,
     trigger: /\bSIMILARES\b/i
   },
   {
     name: 'FARMACIAS BENAVIDES',
-    regex: /(?:(?:FARMACIA\s*S?)\s*)?(?:BENAVIDES)\b/i,
+    regex: /(?:(?:FARMACIA\s*S?|FARMACTAS|FARMACAS)\s*)?(?:BENAVIDES)\b/i,
     trigger: /\bBENAVIDES\b/i
   },
   {
     name: 'FARMACIAS GUADALAJARA',
-    regex: /(?:(?:FARMACIA\s*S?)\s*)?(?:GUADALAJARA)\b/i,
+    regex: /(?:(?:FARMACIA\s*S?|FARMACTAS|FARMACAS)\s*)?(?:GUADALAJARA)\b/i,
     trigger: /\bGUADALAJARA\b/i
   },
   {
@@ -104,86 +104,123 @@ const BRAND_DEFINITIONS = [
 ];
 
 /**
- * Extrae y une la sucursal, clínica o ciudad a la derecha de la marca
- * Reglas:
- * 1. Captura todo el texto que aparezca a la derecha de la palabra clave en esa misma línea.
- * 2. Corta si salta a nueva línea con domicilio o si está precedido por 2+ espacios hacia la casilla de domicilio.
- * 3. Si viene separado por una coma (ej: "FARMACIAS DEL AHORRO, SANTA CECILIA"), limpia la coma pero conserva la sucursal.
- * 4. Une la base ("FARMACIAS DEL AHORRO" o "FARMACIAS SIMILARES") con la sucursal en MAYÚSCULAS y sin espacios dobles.
+ * Limpieza interna del renglón detectado (Línea 4):
+ * - Remueve comas sueltas y caracteres especiales ilegales de Windows.
+ * - Conserva paréntesis, acentos y letras como la Ñ (ej: MUÑOZ (SAPM)).
+ * - Estandariza a MAYÚSCULAS y remueve espacios dobles.
  */
-function extractBrandWithSuffix(line, brandDef) {
-  if (!line || !brandDef) return null;
+function cleanSingleLineText(text) {
+  if (!text) return '';
+  let str = text.trim();
 
-  const match = brandDef.regex.exec(line);
-  if (!match) return null;
-
-  let rawSuffix = line.slice(match.index + match[0].length);
-
-  // 1. Corte si salta a una nueva línea con domicilio o campos contiguos
-  const newlineCutRegex = /(?:[\r\n]+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
-  rawSuffix = rawSuffix.replace(newlineCutRegex, '');
-
-  // 2. Corte si está precedido por múltiples espacios (2 o más espacios o tabs) indicando salto de casilla
-  const multiSpaceCutRegex = /(?:[ \t]{2,}|\t+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
-  rawSuffix = rawSuffix.replace(multiSpaceCutRegex, '');
-
-  // 3. Corte si contiene la etiqueta explícita de domicilio, municipio o cliente
-  rawSuffix = rawSuffix.replace(/\s*\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b[:.-]?.*/i, '');
-  rawSuffix = rawSuffix.replace(/\s*\b(?:MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|C\.?P\.?|CP\s+\d{4,5})\b[:.-]?.*/i, '');
-  rawSuffix = rawSuffix.replace(/\s*\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b[:.-]?.*/i, '');
-  rawSuffix = rawSuffix.replace(/\bILO[_\s\-]*\d+$/i, '');
-  rawSuffix = rawSuffix.replace(/_\d+$/g, '');
-
-  // 4. Limpieza de caracteres de puntuación (coma, punto, guion, dos puntos)
-  let suffix = rawSuffix.trim();
-  suffix = suffix.replace(/^[,\s;:\-_+=/|\\]+/, '').trim();
-  suffix = suffix.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
-  suffix = suffix.replace(/[\r\n\t\f\v]+/g, ' ');
-  suffix = suffix.replace(/\s{2,}/g, ' ').trim();
-  suffix = suffix.toUpperCase();
-
-  // 5. Filtrar si el sufijo son solo palabras genéricas del formato SEMARNAT
-  const formatWordRegex = /^(?:MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES|GENERADORA|CLIENTE|DOMICILIO|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL)$/i;
-  if (formatWordRegex.test(suffix) || /^[\d\s]+$/.test(suffix) || suffix.length < 2) {
-    suffix = '';
+  // Corte estricto en el renglón si aparece DOMICILIO o campos contiguos
+  const domMatch = str.match(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i);
+  if (domMatch) {
+    str = str.substring(0, domMatch.index).trim();
+  }
+  const clientMatch = str.match(/\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b/i);
+  if (clientMatch) {
+    str = str.substring(0, clientMatch.index).trim();
+  }
+  const munMatch = str.match(/\b(?:MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|C\.?P\.?|CP\s+\d{4,5})\b/i);
+  if (munMatch) {
+    str = str.substring(0, munMatch.index).trim();
   }
 
-  // 6. Si el sufijo empieza con palabras de formato, limpiarlas
-  suffix = suffix.replace(/\b(?:MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|GENERADORA|CLIENTE|DOMICILIO|FOLIO|REGISTRO|AMBIENTAL)\b.*/i, '').trim();
+  // Eliminar prefijos iniciales basura: "4.-", "4-", "L+", ")", "(", "-", "_"
+  str = str.replace(/^(?:L[\s\-_]*4[\s\.\-]*|4[\s\.\-]+|L[\+\-]\s*|[\s)("'\-_+=:;.,/|\\]+)+/gi, '').trim();
 
-  let finalName = brandDef.name;
-  if (suffix) {
-    finalName = `${brandDef.name} ${suffix}`.replace(/\s{2,}/g, ' ').trim();
+  // Limpieza de casillas SEMARNAT mezcladas
+  str = str.replace(/(?:1\s*[\.\-]*\s*)?N[UÚ]M\.?\s*DE\s*REGISTRO(?:\s+AMBIENTAL)?\s*[:.-]?\s*[\w\-/]*/gi, ' ').trim();
+  str = str.replace(/\bN\.?R\.?A\.?\s*[:.-]?\s*[\w\-/]*/gi, ' ').trim();
+
+  // Eliminar caracteres prohibidos en nombres de archivo de Windows: \ / : * ? " < > |
+  // y caracteres de puntuación como comas intermedias/sueltas, puntos (convierte S.A. a SA)
+  str = str.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
+
+  // Limpiar espacios dobles
+  str = str.replace(/\s{2,}/g, ' ').trim();
+
+  // Convertir a MAYÚSCULAS
+  str = str.toUpperCase();
+
+  // Limpiar cualquier símbolo raro al inicio o al final (manteniendo letras, números y paréntesis)
+  str = str.replace(/^[^A-Z0-9ÁÉÍÓÚÑ(]+/, '').trim();
+  str = str.replace(/[^A-Z0-9ÁÉÍÓÚÑ)]+$/, '').trim();
+
+  return str;
+}
+
+/**
+ * Control de Errores de Lectura (Reemplazo Inteligente):
+ * Si detecta palabras de marca (ej: FARMACTAS, AHORRO, SIMILARES) en la línea,
+ * estandariza el inicio del nombre correctamente ("FARMACIAS DEL AHORRO" o "FARMACIAS SIMILARES")
+ * y lo conecta con el nombre de la sucursal extraído de esa misma línea.
+ */
+function applyBrandDictionaryToLine(line) {
+  if (!line) return null;
+
+  for (const brandDef of BRAND_DEFINITIONS) {
+    if (brandDef.trigger.test(line)) {
+      const match = brandDef.regex.exec(line);
+      if (match) {
+        // Capturar ÚNICAMENTE el texto que aparece a la derecha de la marca en esa misma línea
+        let rawSuffix = line.slice(match.index + match[0].length);
+
+        // Cortar antes de DOMICILIO o campos contiguos
+        const domMatch = rawSuffix.match(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|C\.?P\.?|CP\b|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b/i);
+        if (domMatch) {
+          rawSuffix = rawSuffix.substring(0, domMatch.index);
+        }
+
+        // Limpieza de caracteres de puntuación (coma, punto, guion) y caracteres ilegales
+        let suffix = rawSuffix.trim();
+        suffix = suffix.replace(/^[,\s;:\-_+=/|\\]+/, '').trim();
+        suffix = suffix.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
+        suffix = suffix.replace(/\s{2,}/g, ' ').trim();
+        suffix = suffix.replace(/[,\s;:\-_+=/|\\.]+$/, '').trim();
+        suffix = suffix.toUpperCase();
+
+        // Filtrar si el sufijo son solo palabras genéricas de formato
+        const formatWordRegex = /^(?:MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES|GENERADORA|CLIENTE|DOMICILIO|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL)$/i;
+        if (formatWordRegex.test(suffix) || /^[\d\s]+$/.test(suffix) || suffix.length < 2) {
+          suffix = '';
+        }
+        suffix = suffix.replace(/\b(?:MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|GENERADORA|CLIENTE|DOMICILIO|FOLIO|REGISTRO|AMBIENTAL)\b.*/i, '').trim();
+
+        let finalName = brandDef.name;
+        if (suffix) {
+          finalName = `${brandDef.name} ${suffix}`.replace(/\s{2,}/g, ' ').trim();
+        }
+
+        if (finalName.length > 60) {
+          finalName = finalName.substring(0, 60).trim();
+        }
+        finalName = finalName.replace(/[^A-Z0-9ÁÉÍÓÚÑ)]+$/, '').trim();
+        return finalName;
+      }
+    }
   }
 
-  // Límite de 60 caracteres
-  if (finalName.length > 60) {
-    finalName = finalName.substring(0, 60).trim();
-  }
-  finalName = finalName.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
-
-  return finalName;
+  return null;
 }
 
 /**
  * Diccionario de Respaldo Asociativo
- * Si el OCR falla en aislar la Razón Social pero el texto completo de la página
- * contiene palabras clave inequívocas de la empresa generadora.
- * Conserva la sucursal, clínica o ciudad si viene en esa misma línea.
+ * Si el OCR falla en aislar la Casilla 4 pero el texto completo contiene marcas conocidas en alguna línea.
  */
 function checkBackupDictionary(fullText) {
   if (!fullText) return null;
 
   const lines = fullText.split(/\r?\n+/);
 
+  for (const line of lines) {
+    const res = applyBrandDictionaryToLine(line);
+    if (res) return res;
+  }
+
   for (const brandDef of BRAND_DEFINITIONS) {
     if (brandDef.trigger.test(fullText)) {
-      for (const line of lines) {
-        if (brandDef.trigger.test(line)) {
-          const res = extractBrandWithSuffix(line, brandDef);
-          if (res) return res;
-        }
-      }
       return brandDef.name;
     }
   }
@@ -192,136 +229,117 @@ function checkBackupDictionary(fullText) {
 }
 
 /**
- * Sanitizer de nombre de empresa para corrección ortográfica, formateo limpio y rutas seguras
- * Reglas estrictas:
- * 1. CONSERVACIÓN DE SUCURSAL Y CIUDAD: captura y conserva sucursales, clínicas o ciudades (ej: "FARMACIAS DEL AHORRO SANTA CECILIA").
- * 2. AJUSTE DEL PUNTO DE CORTE: palabras de dirección ("DOMICILIO:", "BLVD", "CALLE") solo cortan si están en nueva línea o precedidas por 2+ espacios.
- * 3. Limpieza de comas intermedias y formato en MAYÚSCULAS sin espacios dobles ni caracteres ilegales en Windows (<= 60 caracteres).
+ * Sanitizer de nombre de empresa para compatibilidad
  */
 function sanitizeCompanyName(name, fullText = '') {
   if (!name && !fullText) return null;
 
-  let text = (name || '').trim();
+  const line = (name || '').split(/\r?\n+/)[0] || '';
 
-  // 1. VERIFICAR PRIMERO SI CORRESPONDE A UNA MARCA DEL DICCIONARIO (AHORRO, SIMILARES, etc.)
-  for (const brandDef of BRAND_DEFINITIONS) {
-    if (brandDef.trigger.test(text)) {
-      const res = extractBrandWithSuffix(text, brandDef);
-      if (res) return res;
-    }
-  }
+  const brandResult = applyBrandDictionaryToLine(line);
+  if (brandResult) return brandResult;
 
-  // 2. LIMPIEZA AGRESIVA DE CABECERAS FRAGMENTADAS ("4-", "4.-", "L-4-", "L+", ")", "RAZON SOCIAL", etc.)
-  const headerCutoffRegex = /(?:(?:L[\s\-_]*)?4\s*[\.\-]+\s*|L[\+\-]\s*|\)\s*[-_]?\s*|RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA\b)\s*[:.-]?\s*/gi;
-  let match;
-  let lastIndex = -1;
-  while ((match = headerCutoffRegex.exec(text)) !== null) {
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex >= 0) {
-    text = text.slice(lastIndex).trim();
-  }
+  let cleaned = cleanSingleLineText(line);
 
-  // Si tras limpiar la cabecera coincide con alguna marca del diccionario
-  for (const brandDef of BRAND_DEFINITIONS) {
-    if (brandDef.trigger.test(text)) {
-      const res = extractBrandWithSuffix(text, brandDef);
-      if (res) return res;
-    }
-  }
-
-  // 3. CORTE SEGURO DE DOMICILIO / DIRECCIÓN (Regla 2):
-  // Solo debe aplicarse si esas palabras aparecen:
-  // a) Al inicio de una nueva línea
-  // b) O precedidas por múltiples espacios (2 o más)
-  // c) O si es explícitamente la etiqueta DOMICILIO: o DIRECCION:
-  const newlineCutRegex = /(?:[\r\n]+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
-  text = text.replace(newlineCutRegex, '').trim();
-
-  const multiSpaceCutRegex = /(?:[ \t]{2,}|\t+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
-  text = text.replace(multiSpaceCutRegex, '').trim();
-
-  // Corte seguro explícito si dice DOMICILIO: o DIRECCION:
-  if (/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i.test(text)) {
-    const parts = text.split(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b[:.-]?/i);
-    text = parts[0].trim();
-  }
-
-  // Corte seguro si salta a casilla contigua NO DE CLIENTE o FOLIO
-  if (/\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b/i.test(text)) {
-    const clientParts = text.split(/\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b[:.-]?/i);
-    text = clientParts[0].trim();
-  }
-
-  // Limpieza de casillas SEMARNAT mezcladas como "1.-NÚM. DE REGISTRO AMBIENTAL ABC123" o NRA
-  text = text.replace(/(?:1\s*[\.\-]*\s*)?N[UÚ]M\.?\s*DE\s*REGISTRO(?:\s+AMBIENTAL)?\s*[:.-]?\s*[\w\-\/]*/gi, ' ').trim();
-  text = text.replace(/\bN\.?R\.?A\.?\s*[:.-]?\s*[\w\-\/]*/gi, ' ').trim();
-
-  // Limpieza de prefijos basura al inicio
-  text = text.replace(/^(?:L[\s\-_]*4[\s\.\-]*|4[\s\.\-]+|L[\+\-]\s*|[\s)("'\-_+=:;.,\/\\]+)+/gi, '').trim();
-
-  // Eliminar sufijos numéricos de página o residuos
-  text = text.replace(/\bILO[_\s\-]*\d+$/gi, '').trim();
-  text = text.replace(/_\d+$/g, '').trim();
-
-  // Convertir a MAYÚSCULAS
-  text = text.toUpperCase();
-
-  // Eliminar caracteres especiales que rompan rutas de Windows
-  text = text.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
-
-  // Remoción de espacios triples/múltiples y saltos de línea
-  text = text.replace(/[\r\n\t\f\v]+/g, ' ');
-  text = text.replace(/\s{2,}/g, ' ').trim();
-
-  // Limpiar cualquier símbolo raro al inicio o al final
-  text = text.replace(/^[^A-Z0-9ÁÉÍÓÚÑ]+/, '').trim();
-  text = text.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
-
-  // Validación de formato
   const formatWordsRegex = /\b(?:GENERADORA|CLIENTE|DOMICILIO|DOMICTLIO|DIRECCION|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL|MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES)\b/i;
-  const isInvalidFormat = formatWordsRegex.test(text) || text.length < 4 || /^[\d\s]+$/.test(text);
-
-  if (isInvalidFormat) {
-    // Diccionario de Respaldo Asociativo
-    const backupCompany = checkBackupDictionary(fullText || name);
-    if (backupCompany) {
-      return backupCompany;
-    }
-    return null;
+  if (formatWordsRegex.test(cleaned) || cleaned.length < 4 || /^[\d\s]+$/.test(cleaned)) {
+    return checkBackupDictionary(fullText || name);
   }
 
-  // Restricción de longitud máxima (<= 60 caracteres)
-  if (text.length > 60) {
-    text = text.substring(0, 60).trim();
+  if (cleaned.length > 60) {
+    cleaned = cleaned.substring(0, 60).trim();
   }
-  text = text.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
+  cleaned = cleaned.replace(/[^A-Z0-9ÁÉÍÓÚÑ)]+$/, '').trim();
 
-  return text.length >= 4 ? text : (checkBackupDictionary(fullText || name) || null);
+  return cleaned.length >= 4 ? cleaned : (checkBackupDictionary(fullText || name) || null);
 }
 
 /**
- * Función de extracción flexible y definitiva de Razón Social
- * Regla: Captura todo lo que esté a la DERECHA de frases como:
- * "4-", "4.-", "L-4-", "RAZON SOCIAL DE LA EMPRESA GENERADORA:", "RAZON SOCIAL:", o "GENERADORA:".
- * No borra la línea completa, solo toma lo que sigue a la derecha.
+ * Función de extracción de Razón Social por regla de coincidencia exacta por renglón (Línea 4):
+ * 1. CAPTURA EXCLUSIVA A LA DERECHA DE LOS DOS PUNTOS:
+ *    Localiza la línea específica de la Casilla 4 de SEMARNAT y toma únicamente lo que está a la derecha de ':'.
+ *    Se detiene antes de cualquier salto de línea '\n' o de la palabra 'DOMICILIO' (no lee renglones inferiores).
+ * 2. LIMPIEZA INTERNA DEL RENGLÓN DETECTADO:
+ *    Remueve espacios dobles y comas sueltas, conservando intacta la sucursal, ciudad o siglas (ej: "MUÑOZ (SAPM)").
+ * 3. CONTROL DE ERRORES DE LECTURA (Reemplazo Inteligente):
+ *    Estandariza marcas ("FARMACIAS DEL AHORRO", "FARMACIAS SIMILARES") unidas con la sucursal de esa misma línea.
  */
 function extractAndCleanRazonSocial(rawText) {
   if (!rawText) return null;
 
-  // 1. Extracción flexible: Todo lo que esté a la DERECHA del prefijo manteniendo saltos y espaciado
-  const prefixRegex = /(?:(?:L[\s\-_]*)?4\s*[\.\-]+\s*|L[\+\-]\s*|\)\s*[-_]?\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA)\s*[:.-]?\s*/i;
-  const match = rawText.match(prefixRegex);
+  // Dividir el texto por líneas para evitar arrastrar líneas inferiores
+  const lines = rawText.split(/\r?\n+/);
 
-  let candidate = '';
-  if (match) {
-    candidate = rawText.slice(match.index + match[0].length).trim();
-  } else {
-    candidate = rawText.trim();
+  // 1. CAPTURA EXCLUSIVA A LA DERECHA DE LOS DOS PUNTOS (Línea 4)
+  const box4HeaderRegex = /(?:(?:L[\s\-_]*)?4\s*[\.\-]+|L[\+\-]\s*|\)\s*[-_]?\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA\b)/i;
+
+  let line4 = null;
+  for (const line of lines) {
+    if (box4HeaderRegex.test(line)) {
+      line4 = line;
+      break;
+    }
   }
 
-  // 2. Sanitizar, pasar el texto completo para el diccionario de respaldo asociativo
-  return sanitizeCompanyName(candidate, rawText);
+  let capturedText = '';
+
+  if (line4) {
+    const headerMatch = box4HeaderRegex.exec(line4);
+    // Buscar específicamente los dos puntos ':' a la derecha del patrón de Casilla 4
+    const colonIndex = line4.indexOf(':', headerMatch.index);
+    if (colonIndex !== -1) {
+      capturedText = line4.slice(colonIndex + 1);
+    } else {
+      // Si la línea no contiene ':' capturar lo que sigue al encabezado en ese renglón
+      capturedText = line4.slice(headerMatch.index + headerMatch[0].length);
+    }
+  } else {
+    // Si no localiza la cabecera explícita "4.- RAZON SOCIAL", buscar renglón que contenga alguna marca del diccionario
+    for (const line of lines) {
+      for (const brandDef of BRAND_DEFINITIONS) {
+        if (brandDef.trigger.test(line)) {
+          const brandMatch = brandDef.regex.exec(line);
+          if (brandMatch) {
+            capturedText = line.slice(brandMatch.index);
+            break;
+          }
+        }
+      }
+      if (capturedText) break;
+    }
+  }
+
+  if (!capturedText) {
+    return null;
+  }
+
+  // Detener la extracción inmediatamente si empieza la palabra DOMICILIO en esa misma línea
+  const domMatch = capturedText.match(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i);
+  if (domMatch) {
+    capturedText = capturedText.substring(0, domMatch.index);
+  }
+
+  // 2. CONTROL DE ERRORES DE LECTURA (Diccionario de reemplazo inteligente)
+  const brandResult = applyBrandDictionaryToLine(capturedText);
+  if (brandResult) {
+    return brandResult;
+  }
+
+  // 3. LIMPIEZA INTERNA DEL RENGLÓN PARA OTRAS EMPRESAS
+  let cleaned = cleanSingleLineText(capturedText);
+
+  // Validación de formato
+  const formatWordsRegex = /\b(?:GENERADORA|CLIENTE|DOMICILIO|DOMICTLIO|DIRECCION|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL|MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES)\b/i;
+  if (formatWordsRegex.test(cleaned) || cleaned.length < 4 || /^[\d\s]+$/.test(cleaned)) {
+    return checkBackupDictionary(rawText);
+  }
+
+  if (cleaned.length > 60) {
+    cleaned = cleaned.substring(0, 60).trim();
+  }
+  cleaned = cleaned.replace(/[^A-Z0-9ÁÉÍÓÚÑ)]+$/, '').trim();
+
+  return cleaned.length >= 4 ? cleaned : (checkBackupDictionary(rawText) || null);
 }
 
 /**
