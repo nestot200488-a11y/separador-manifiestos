@@ -70,34 +70,122 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
+const BRAND_DEFINITIONS = [
+  {
+    name: 'FARMACIAS DEL AHORRO',
+    regex: /(?:(?:FARMACIA\s*S?|FARMACTAS|FARMACAS)\s*)?(?:DEL\s*AHORRO|DELAHORRO|OER[\s\-_]*AHONNO|OER[\s\-_]*AHORRO|AHORRO|AHONNO)\b/i,
+    trigger: /\b(?:AHORRO|AHONNO|DELAHORRO|FARMACTAS|FARMACAS)\b/i
+  },
+  {
+    name: 'FARMACIAS SIMILARES',
+    regex: /(?:(?:FARMACIA\s*S?)\s*)?(?:SIMILARES)\b/i,
+    trigger: /\bSIMILARES\b/i
+  },
+  {
+    name: 'FARMACIAS BENAVIDES',
+    regex: /(?:(?:FARMACIA\s*S?)\s*)?(?:BENAVIDES)\b/i,
+    trigger: /\bBENAVIDES\b/i
+  },
+  {
+    name: 'FARMACIAS GUADALAJARA',
+    regex: /(?:(?:FARMACIA\s*S?)\s*)?(?:GUADALAJARA)\b/i,
+    trigger: /\bGUADALAJARA\b/i
+  },
+  {
+    name: 'NUEVA WALMART DE MEXICO',
+    regex: /(?:NUEVA\s+)?(?:WALMART|WAL-MART)(?:\s+DE\s+MEXICO)?\b/i,
+    trigger: /\b(?:WALMART|WAL-MART)\b/i
+  },
+  {
+    name: 'CENTRO HOSPITALARIO MAC',
+    regex: /(?:CENTRO\s+HOSPITALARIO\s+MAC|HOSPITAL(?:ARIO)?\s+MAC)\b/i,
+    trigger: /\b(?:CENTRO\s+HOSPITALARIO\s+MAC|HOSPITAL(?:ARIO)?\s+MAC)\b/i
+  }
+];
+
+/**
+ * Extrae y une la sucursal, clínica o ciudad a la derecha de la marca
+ * Reglas:
+ * 1. Captura todo el texto que aparezca a la derecha de la palabra clave en esa misma línea.
+ * 2. Corta si salta a nueva línea con domicilio o si está precedido por 2+ espacios hacia la casilla de domicilio.
+ * 3. Si viene separado por una coma (ej: "FARMACIAS DEL AHORRO, SANTA CECILIA"), limpia la coma pero conserva la sucursal.
+ * 4. Une la base ("FARMACIAS DEL AHORRO" o "FARMACIAS SIMILARES") con la sucursal en MAYÚSCULAS y sin espacios dobles.
+ */
+function extractBrandWithSuffix(line, brandDef) {
+  if (!line || !brandDef) return null;
+
+  const match = brandDef.regex.exec(line);
+  if (!match) return null;
+
+  let rawSuffix = line.slice(match.index + match[0].length);
+
+  // 1. Corte si salta a una nueva línea con domicilio o campos contiguos
+  const newlineCutRegex = /(?:[\r\n]+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
+  rawSuffix = rawSuffix.replace(newlineCutRegex, '');
+
+  // 2. Corte si está precedido por múltiples espacios (2 o más espacios o tabs) indicando salto de casilla
+  const multiSpaceCutRegex = /(?:[ \t]{2,}|\t+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
+  rawSuffix = rawSuffix.replace(multiSpaceCutRegex, '');
+
+  // 3. Corte si contiene la etiqueta explícita de domicilio, municipio o cliente
+  rawSuffix = rawSuffix.replace(/\s*\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b[:.-]?.*/i, '');
+  rawSuffix = rawSuffix.replace(/\s*\b(?:MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|C\.?P\.?|CP\s+\d{4,5})\b[:.-]?.*/i, '');
+  rawSuffix = rawSuffix.replace(/\s*\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b[:.-]?.*/i, '');
+  rawSuffix = rawSuffix.replace(/\bILO[_\s\-]*\d+$/i, '');
+  rawSuffix = rawSuffix.replace(/_\d+$/g, '');
+
+  // 4. Limpieza de caracteres de puntuación (coma, punto, guion, dos puntos)
+  let suffix = rawSuffix.trim();
+  suffix = suffix.replace(/^[,\s;:\-_+=/|\\]+/, '').trim();
+  suffix = suffix.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
+  suffix = suffix.replace(/[\r\n\t\f\v]+/g, ' ');
+  suffix = suffix.replace(/\s{2,}/g, ' ').trim();
+  suffix = suffix.toUpperCase();
+
+  // 5. Filtrar si el sufijo son solo palabras genéricas del formato SEMARNAT
+  const formatWordRegex = /^(?:MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES|GENERADORA|CLIENTE|DOMICILIO|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL)$/i;
+  if (formatWordRegex.test(suffix) || /^[\d\s]+$/.test(suffix) || suffix.length < 2) {
+    suffix = '';
+  }
+
+  // 6. Si el sufijo empieza con palabras de formato, limpiarlas
+  suffix = suffix.replace(/\b(?:MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|GENERADORA|CLIENTE|DOMICILIO|FOLIO|REGISTRO|AMBIENTAL)\b.*/i, '').trim();
+
+  let finalName = brandDef.name;
+  if (suffix) {
+    finalName = `${brandDef.name} ${suffix}`.replace(/\s{2,}/g, ' ').trim();
+  }
+
+  // Límite de 60 caracteres
+  if (finalName.length > 60) {
+    finalName = finalName.substring(0, 60).trim();
+  }
+  finalName = finalName.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
+
+  return finalName;
+}
+
 /**
  * Diccionario de Respaldo Asociativo
  * Si el OCR falla en aislar la Razón Social pero el texto completo de la página
  * contiene palabras clave inequívocas de la empresa generadora.
+ * Conserva la sucursal, clínica o ciudad si viene en esa misma línea.
  */
 function checkBackupDictionary(fullText) {
   if (!fullText) return null;
-  const upper = fullText.toUpperCase();
 
-  // Si dentro de todo el texto de la página lee la palabra "AHORRO" (o variantes OCR como AHONNO)
-  if (/\b(?:AHORRO|AHONNO|DELAHORRO|FARMACTAS|FARMACAS)\b/i.test(upper)) {
-    return 'FARMACIAS DEL AHORRO';
-  }
+  const lines = fullText.split(/\r?\n+/);
 
-  if (/\bBENAVIDES\b/i.test(upper)) {
-    return 'FARMACIAS BENAVIDES';
-  }
-
-  if (/\bGUADALAJARA\b/i.test(upper)) {
-    return 'FARMACIAS GUADALAJARA';
-  }
-
-  if (/\bWALMART\b|\bWAL-MART\b|\bNUEVA\s+WALMART\b/i.test(upper)) {
-    return 'NUEVA WALMART DE MEXICO';
-  }
-
-  if (/\bCENTRO\s+HOSPITALARIO\s+MAC\b|\bHOSPITAL(?:ARIO)?\s+MAC\b/i.test(upper)) {
-    return 'CENTRO HOSPITALARIO MAC';
+  for (const brandDef of BRAND_DEFINITIONS) {
+    if (brandDef.trigger.test(fullText)) {
+      for (const line of lines) {
+        if (brandDef.trigger.test(line)) {
+          const res = extractBrandWithSuffix(line, brandDef);
+          if (res) return res;
+        }
+      }
+      return brandDef.name;
+    }
   }
 
   return null;
@@ -105,27 +193,26 @@ function checkBackupDictionary(fullText) {
 
 /**
  * Sanitizer de nombre de empresa para corrección ortográfica, formateo limpio y rutas seguras
- * Reglas de extracción y limpieza absolutas:
- * 1. LIMPIEZA AGRESIVA DE CABECERAS FRAGMENTADAS ("4-", "4.-", "L-4-", "L+", ")", "RAZON SOCIAL", etc.):
- *    Borra por completo esa frase y toma ÚNICAMENTE el texto que esté a la derecha.
- * 2. CORTE SEGURO EN "DOMICILIO": Tomar exclusivamente la parte izquierda antes de términos de dirección.
- * 3. ASIGNACIÓN ASOCIATIVA POR PALABRAS CLAVE (Diccionario de Respaldo):
- *    Si falla en aislar la Razón Social pero la página contiene "AHORRO", asigna "FARMACIAS DEL AHORRO".
- *    Si el resultado final es < 4 caracteres o contiene palabras del formato (GENERADORA, CLIENTE, etc.),
- *    clasifica estrictamente como null (EMPRESA_NO_DETECTADA) sin arrastrar títulos.
- * 4. REMOCIÓN DE CARACTERES EXTRAÑOS:
- *    Limpia espacios triples/múltiples, saltos de línea y símbolos raros al inicio o final.
- * 5. Mayúsculas, caracteres seguros para Windows y límite estricto de 60 caracteres.
+ * Reglas estrictas:
+ * 1. CONSERVACIÓN DE SUCURSAL Y CIUDAD: captura y conserva sucursales, clínicas o ciudades (ej: "FARMACIAS DEL AHORRO SANTA CECILIA").
+ * 2. AJUSTE DEL PUNTO DE CORTE: palabras de dirección ("DOMICILIO:", "BLVD", "CALLE") solo cortan si están en nueva línea o precedidas por 2+ espacios.
+ * 3. Limpieza de comas intermedias y formato en MAYÚSCULAS sin espacios dobles ni caracteres ilegales en Windows (<= 60 caracteres).
  */
 function sanitizeCompanyName(name, fullText = '') {
   if (!name && !fullText) return null;
 
   let text = (name || '').trim();
 
-  // 1. LIMPIEZA AGRESIVA DE CABECERAS FRAGMENTADAS ("4-", "4.-", "L-4-", "L+", ")", "RAZON SOCIAL", etc.)
-  // Si contiene o empieza con estos patrones, borrar por completo y quedarse ÚNICAMENTE con lo que esté a la derecha
+  // 1. VERIFICAR PRIMERO SI CORRESPONDE A UNA MARCA DEL DICCIONARIO (AHORRO, SIMILARES, etc.)
+  for (const brandDef of BRAND_DEFINITIONS) {
+    if (brandDef.trigger.test(text)) {
+      const res = extractBrandWithSuffix(text, brandDef);
+      if (res) return res;
+    }
+  }
+
+  // 2. LIMPIEZA AGRESIVA DE CABECERAS FRAGMENTADAS ("4-", "4.-", "L-4-", "L+", ")", "RAZON SOCIAL", etc.)
   const headerCutoffRegex = /(?:(?:L[\s\-_]*)?4\s*[\.\-]+\s*|L[\+\-]\s*|\)\s*[-_]?\s*|RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA\b)\s*[:.-]?\s*/gi;
-  
   let match;
   let lastIndex = -1;
   while ((match = headerCutoffRegex.exec(text)) !== null) {
@@ -135,20 +222,32 @@ function sanitizeCompanyName(name, fullText = '') {
     text = text.slice(lastIndex).trim();
   }
 
-  // 2. CORTE SEGURO EN "DOMICILIO" (Quedarse exclusivamente con la parte izquierda)
+  // Si tras limpiar la cabecera coincide con alguna marca del diccionario
+  for (const brandDef of BRAND_DEFINITIONS) {
+    if (brandDef.trigger.test(text)) {
+      const res = extractBrandWithSuffix(text, brandDef);
+      if (res) return res;
+    }
+  }
+
+  // 3. CORTE SEGURO DE DOMICILIO / DIRECCIÓN (Regla 2):
+  // Solo debe aplicarse si esas palabras aparecen:
+  // a) Al inicio de una nueva línea
+  // b) O precedidas por múltiples espacios (2 o más)
+  // c) O si es explícitamente la etiqueta DOMICILIO: o DIRECCION:
+  const newlineCutRegex = /(?:[\r\n]+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
+  text = text.replace(newlineCutRegex, '').trim();
+
+  const multiSpaceCutRegex = /(?:[ \t]{2,}|\t+)\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b.*/i;
+  text = text.replace(multiSpaceCutRegex, '').trim();
+
+  // Corte seguro explícito si dice DOMICILIO: o DIRECCION:
   if (/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b/i.test(text)) {
     const parts = text.split(/\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N)\b[:.-]?/i);
     text = parts[0].trim();
   }
 
-  // Corte ante términos comunes de dirección si se colaron
-  const addressTermsRegex = /\b(?:AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CARR\.?|CARRETERA|C\.?P\.?|CP\b|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO)\b/i;
-  const addrMatch = text.match(addressTermsRegex);
-  if (addrMatch && addrMatch.index > 0) {
-    text = text.substring(0, addrMatch.index).trim();
-  }
-
-  // Corte si se colaron casillas contiguas como NO DE CLIENTE o FOLIO
+  // Corte seguro si salta a casilla contigua NO DE CLIENTE o FOLIO
   if (/\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b/i.test(text)) {
     const clientParts = text.split(/\b(?:(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b[:.-]?/i);
     text = clientParts[0].trim();
@@ -158,26 +257,12 @@ function sanitizeCompanyName(name, fullText = '') {
   text = text.replace(/(?:1\s*[\.\-]*\s*)?N[UÚ]M\.?\s*DE\s*REGISTRO(?:\s+AMBIENTAL)?\s*[:.-]?\s*[\w\-\/]*/gi, ' ').trim();
   text = text.replace(/\bN\.?R\.?A\.?\s*[:.-]?\s*[\w\-\/]*/gi, ' ').trim();
 
-  // 3. LIMPIEZA DE PREFIJOS Y BASURA AL INICIO
+  // Limpieza de prefijos basura al inicio
   text = text.replace(/^(?:L[\s\-_]*4[\s\.\-]*|4[\s\.\-]+|L[\+\-]\s*|[\s)("'\-_+=:;.,\/\\]+)+/gi, '').trim();
 
-  // 4. NORMALIZACIÓN INTELIGENTE DE MARCAS
-  text = text.replace(/\bOER[\s\-_]*AHONNO\b/gi, 'DEL AHORRO');
-  text = text.replace(/\bDEL[\s\-_]*AHONNO\b/gi, 'DEL AHORRO');
-  text = text.replace(/\bOER[\s\-_]*AHORRO\b/gi, 'DEL AHORRO');
-  text = text.replace(/\bDELAHORRO\b/gi, 'DEL AHORRO');
-
-  text = text.replace(/\bFARMACIA\s+S\b/gi, 'FARMACIAS');
-  text = text.replace(/\bFARMACTAS\b/gi, 'FARMACIAS');
-  text = text.replace(/\bFARMACIS\b/gi, 'FARMACIAS');
-  text = text.replace(/\bFARMACAS\b/gi, 'FARMACIAS');
-
-  text = text.replace(/^DEL\s+AHORRO\b/gi, 'FARMACIAS DEL AHORRO');
-  text = text.replace(/\bFARMACIASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
-
-  // Eliminar sufijos numéricos de página o residuos como "ILO_5", "_5", "_39"
+  // Eliminar sufijos numéricos de página o residuos
   text = text.replace(/\bILO[_\s\-]*\d+$/gi, '').trim();
-  text = text.replace(/[_\s\-]+\d+$/g, '').trim();
+  text = text.replace(/_\d+$/g, '').trim();
 
   // Convertir a MAYÚSCULAS
   text = text.toUpperCase();
@@ -185,7 +270,7 @@ function sanitizeCompanyName(name, fullText = '') {
   // Eliminar caracteres especiales que rompan rutas de Windows
   text = text.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
 
-  // 5. REMOCIÓN DE CARACTERES EXTRAÑOS, ESPACIOS TRIPLES/MÚLTIPLES Y SALTOS DE LÍNEA
+  // Remoción de espacios triples/múltiples y saltos de línea
   text = text.replace(/[\r\n\t\f\v]+/g, ' ');
   text = text.replace(/\s{2,}/g, ' ').trim();
 
@@ -193,24 +278,16 @@ function sanitizeCompanyName(name, fullText = '') {
   text = text.replace(/^[^A-Z0-9ÁÉÍÓÚÑ]+/, '').trim();
   text = text.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
 
-  // 6. VALIDACIÓN: ¿Contiene palabras del formato, es menor a 4 caracteres o es texto basura?
+  // Validación de formato
   const formatWordsRegex = /\b(?:GENERADORA|CLIENTE|DOMICILIO|DOMICTLIO|DIRECCION|FOLIO|REGISTRO|AMBIENTAL|RAZON\s+SOCIAL|MANIFIESTO|RESIDUOS|TRANSPORTE|SEMARNAT|FORMATO|DOCUMENTO|INSTRUCCIONES)\b/i;
   const isInvalidFormat = formatWordsRegex.test(text) || text.length < 4 || /^[\d\s]+$/.test(text);
 
-  // Si contiene "AHORRO" o "AHONNO", o si la extracción no fue limpia y el documento contiene "AHORRO"
-  if (/\b(?:AHORRO|AHONNO|DELAHORRO)\b/i.test(text) || /\b(?:AHORRO|AHONNO|DELAHORRO)\b/i.test(fullText)) {
-    if (isInvalidFormat || !text.startsWith('FARMACIAS')) {
-      return 'FARMACIAS DEL AHORRO';
-    }
-  }
-
   if (isInvalidFormat) {
-    // ASIGNACIÓN ASOCIATIVA POR PALABRAS CLAVE (Diccionario de Respaldo)
+    // Diccionario de Respaldo Asociativo
     const backupCompany = checkBackupDictionary(fullText || name);
     if (backupCompany) {
       return backupCompany;
     }
-    // Si no coincide y contiene títulos fijos o es < 4 caracteres, clasificar estrictamente como null (EMPRESA_NO_DETECTADA)
     return null;
   }
 
@@ -232,18 +309,15 @@ function sanitizeCompanyName(name, fullText = '') {
 function extractAndCleanRazonSocial(rawText) {
   if (!rawText) return null;
 
-  const normalized = rawText.replace(/[\r\n\t\f\v]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-
-  // 1. Extracción flexible: Todo lo que esté a la DERECHA del prefijo
+  // 1. Extracción flexible: Todo lo que esté a la DERECHA del prefijo manteniendo saltos y espaciado
   const prefixRegex = /(?:(?:L[\s\-_]*)?4\s*[\.\-]+\s*|L[\+\-]\s*|\)\s*[-_]?\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA|\bGENERADORA)\s*[:.-]?\s*/i;
-  const match = normalized.match(prefixRegex);
+  const match = rawText.match(prefixRegex);
 
   let candidate = '';
   if (match) {
-    candidate = normalized.slice(match.index + match[0].length).trim();
+    candidate = rawText.slice(match.index + match[0].length).trim();
   } else {
-    // Si no contiene el prefijo exacto, evaluar el texto para no descartar empresas
-    candidate = normalized;
+    candidate = rawText.trim();
   }
 
   // 2. Sanitizar, pasar el texto completo para el diccionario de respaldo asociativo
