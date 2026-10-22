@@ -72,72 +72,119 @@ setInterval(() => {
 
 /**
  * Sanitizer de nombre de empresa para corrección ortográfica, formateo limpio y rutas seguras
- * 1. Restricción estricta de longitud máxima (<= 60 caracteres) para evitar errores de WinRAR / MAX_PATH.
- * 2. Corte inmediato antes de términos de dirección si se filtran en la lectura OCR (DOMICILIO, AV., CP, etc.).
- * 3. Corrección ortográfica ("FARMACTAS", "FARMACIS", "FARMACIA S" -> "FARMACIAS", "DELAHORRO" -> "DEL AHORRO").
- * 4. Conversión a MAYÚSCULAS y eliminación de caracteres incompatibles con Windows (|, ,, ;, ., #, etc.).
+ * Reglas estrictas:
+ * 1. Punto de corte estricto para el renglón antes de términos de domicilio (DOMICILIO, AV., CALLE, C.P., CP, MUNICIPIO, EDO, etc.)
+ *    o títulos de casillas contiguas (NO DE CLIENTE, FOLIO, etc.).
+ * 2. Filtrado extensivo de títulos impresos del formato SEMARNAT ("4.- RAZON SOCIAL...", "1.- NÚM DE REGISTRO...", "NO DE CLIENTE", "FOLIO").
+ * 3. Limpieza de espacios especiales ("FARMACIA S" -> "FARMACIAS", espacios dobles) y símbolos raros al inicio/final.
+ * 4. Asignación automática de EMPRESA_NO_DETECTADA (null) si empieza con "DOMICILIO", "NO DE CLIENTE" o títulos del formato.
+ * 5. Restricción estricta de longitud máxima (<= 60 caracteres) para evitar error de WinRAR / MAX_PATH.
  */
 function sanitizeCompanyName(name) {
   if (!name) return null;
 
-  let text = name;
+  let text = name.trim();
 
-  // 1. Corte inmediato antes de cualquier término de dirección si se filtró en la lectura OCR
-  const addressCutoffRegex = /\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|C[OÓ]DIGO\s+POSTAL|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|RFC\b)\b/i;
-  const addrMatch = text.match(addressCutoffRegex);
-  if (addrMatch && addrMatch.index > 0) {
-    text = text.substring(0, addrMatch.index).trim();
+  // 1. PUNTO DE CORTE ESTRICTO PARA EL RENGLÓN (Evitar arrastre de casilla de domicilio o campos contiguos)
+  const cutoffRegex = /\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|C[OÓ]DIGO\s+POSTAL|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|EDO\.?|ESTADO|CIUDAD|CD\.?|TEL[EÉ]FONO|TEL\.?|RFC\b|(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE|FOLIO)\b/i;
+  const cutoffMatch = text.match(cutoffRegex);
+  if (cutoffMatch) {
+    if (cutoffMatch.index === 0) {
+      // Si empieza directamente con un término de dirección o título, no se detectó empresa válida
+      return null;
+    }
+    text = text.substring(0, cutoffMatch.index).trim();
   }
 
-  // 2. Correcciones ortográficas de marca e inteligencia de texto
+  // 2. FILTRADO EXTENSIVO DE TÍTULOS IMPRESOS DEL FORMATO SEMARNAT
+  const titlesToRemove = [
+    /(?:4\s*[\.\-]*\s*)?RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?\s*[:.-]?/gi,
+    /\bEMPRESA\s+GENERADORA\s*[:.-]?/gi,
+    /\bGENERADORA\s*[:.-]?/gi,
+    /(?:1\s*[\.\-]*\s*)?N[UÚ]M\.?\s*DE\s*REGISTRO(?:\s+AMBIENTAL)?\s*[:.-]?\s*[\w\-\/]*/gi,
+    /\bN\.?R\.?A\.?\s*[:.-]?\s*[\w\-\/]*/gi,
+    /\b(?:NO\.?|NUM\.?|N[UÚ]MERO)\s+DE\s+CLIENTE\s*[:.-]?\s*\w*/gi,
+    /\bFOLIO(?:\s+B[\-]?\s*1)?\s*[:.-]?\s*\w*/gi
+  ];
+
+  for (const regex of titlesToRemove) {
+    text = text.replace(regex, ' ');
+  }
+
+  // 3. LIMPIEZA DE ESPACIOS ESPECIALES Y CORRECCIÓN ORTOGRÁFICA
+  // Si lee "FARMACIA S" (con espacio), unirlo para que quede siempre como "FARMACIAS"
+  text = text.replace(/\bFARMACIA\s+S\b/gi, 'FARMACIAS');
   text = text.replace(/\bFARMACTAS\b/gi, 'FARMACIAS');
   text = text.replace(/\bFARMACIS\b/gi, 'FARMACIAS');
-  text = text.replace(/\bFARMACIA\s+S\b/gi, 'FARMACIAS');
   text = text.replace(/\bFARMACIASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
   text = text.replace(/\bFARMACTASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
   text = text.replace(/\bDELAHORRO\b/gi, 'DEL AHORRO');
 
-  // 3. Estandarización a MAYÚSCULAS
+  // Convertir todo a MAYÚSCULAS
   text = text.toUpperCase();
 
-  // 4. Eliminación de caracteres especiales que rompan rutas de Windows (|, ,, ;, ., #) y los ilegales estándar (\ / : * ? " < > |)
+  // Eliminar caracteres especiales que rompan rutas de Windows (|, ,, ;, ., #) y los ilegales estándar
   text = text.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
 
-  // 5. Limpieza de espacios múltiples y caracteres residuales
+  // Remueve espacios dobles
   text = text.replace(/\s{2,}/g, ' ').trim();
 
-  // 6. Restricción estricta de longitud máxima (máximo 60 caracteres)
+  // Remueve cualquier símbolo raro al inicio o al final (como ")", "(", "-", "_", "+", etc.)
+  text = text.replace(/^[^A-Z0-9ÁÉÍÓÚÑ]+/, '').trim();
+  text = text.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
+
+  // 4. VERIFICACIÓN DE VALIDEZ DEL NOMBRE EXTRAÍDO (Evitar falsos positivos como títulos de casilla)
+  const invalidStarters = [
+    /^DOMICI?LIO\b/,
+    /^NO\s+DE\s+CLIENTE\b/,
+    /^CLIENTE\b/,
+    /^FOLIO\b/,
+    /^NUM\s+DE\s+REGISTRO\b/,
+    /^REGISTRO\s+AMBIENTAL\b/,
+    /^RAZON\s+SOCIAL\b/,
+    /^EMPRESA\s+GENERADORA\b/,
+    /^GENERADORA\b/
+  ];
+
+  for (const inv of invalidStarters) {
+    if (inv.test(text)) {
+      return null;
+    }
+  }
+
+  // Si solo quedaron dígitos, espacios o menos de 3 caracteres, asignar EMPRESA_NO_DETECTADA (null)
+  if (text.length < 3 || /^[\d\s]+$/.test(text)) {
+    return null;
+  }
+
+  // 5. RESTRICCIÓN DE LONGITUD MÁXIMA (<= 60 caracteres)
   if (text.length > 60) {
     text = text.substring(0, 60).trim();
   }
-  text = text.replace(/[\s\-_]+$/, '').trim();
+  text = text.replace(/[^A-Z0-9ÁÉÍÓÚÑ]+$/, '').trim();
 
-  return text.length > 0 ? text : null;
+  return text.length >= 3 ? text : null;
 }
 
 /**
  * Función de extracción flexible y limpieza de Razón Social
- * Soporta variaciones:
- * - "RAZON SOCIAL DE LA EMPRESA GENERADORA:"
- * - "RAZON SOCIAL:"
- * - "EMPRESA GENERADORA:"
- * Con o sin acentos, con o sin dos puntos, tolerante a espacios de escaneo.
+ * Soporta variantes: "4.- RAZON SOCIAL...", "RAZON SOCIAL:", "EMPRESA GENERADORA:"
  */
 function extractAndCleanRazonSocial(rawText) {
   if (!rawText) return null;
 
-  // Unificar saltos de línea y limpiar espacios múltiples iniciales
   const normalized = rawText.replace(/\r?\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-  // 1. Regla RegEx flexible para prefijos de empresa
-  const prefixRegex = /(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA)\s*[:.-]?\s*/i;
+  // 1. Regla RegEx flexible para prefijo (incluye prefijo numérico opcional 4.- o 4-)
+  const prefixRegex = /(?:4\s*[\.\-]*\s*)?(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA)\s*[:.-]?\s*/i;
   const prefixMatch = normalized.match(prefixRegex);
 
-  if (!prefixMatch) {
-    return null;
+  let candidate = '';
+  if (prefixMatch) {
+    candidate = normalized.slice(prefixMatch.index + prefixMatch[0].length).trim();
+  } else {
+    candidate = normalized;
   }
-
-  let candidate = normalized.slice(prefixMatch.index + prefixMatch[0].length).trim();
 
   // 2. Delimitadores estándar posteriores en el formulario de manifiesto
   const stopRegex = /\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|RFC\b|C\.?P\.?|TEL[EÉ]FONO|N[UÚ]MERO|AUTORIZACI[OÓ]N)\b\s*[:.-]?/i;
@@ -146,7 +193,7 @@ function extractAndCleanRazonSocial(rawText) {
     candidate = candidate.slice(0, stopMatch.index).trim();
   }
 
-  // 3. Sanitizar, corregir ortografía, limitar longitud y limpiar ruta de Windows
+  // 3. Sanitizar, corregir ortografía, filtrar títulos impresos y acotar longitud
   return sanitizeCompanyName(candidate);
 }
 
