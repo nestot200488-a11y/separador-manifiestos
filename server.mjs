@@ -71,27 +71,83 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 /**
- * Función de extracción y limpieza de Razón Social
+ * Sanitizer de nombre de empresa para corrección ortográfica, formateo limpio y rutas seguras
+ * 1. Restricción estricta de longitud máxima (<= 60 caracteres) para evitar errores de WinRAR / MAX_PATH.
+ * 2. Corte inmediato antes de términos de dirección si se filtran en la lectura OCR (DOMICILIO, AV., CP, etc.).
+ * 3. Corrección ortográfica ("FARMACTAS", "FARMACIS", "FARMACIA S" -> "FARMACIAS", "DELAHORRO" -> "DEL AHORRO").
+ * 4. Conversión a MAYÚSCULAS y eliminación de caracteres incompatibles con Windows (|, ,, ;, ., #, etc.).
+ */
+function sanitizeCompanyName(name) {
+  if (!name) return null;
+
+  let text = name;
+
+  // 1. Corte inmediato antes de cualquier término de dirección si se filtró en la lectura OCR
+  const addressCutoffRegex = /\b(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|AV\.?|AVENIDA|CALLE|BLVD\.?|BOULEVARD|CALZ\.?|CALZADA|CARR\.?|CARRETERA|C\.?P\.?|CP\b|C[OÓ]DIGO\s+POSTAL|COL\.?|COLONIA|MUNICIPIO|ALCALD[IÍ]A|RFC\b)\b/i;
+  const addrMatch = text.match(addressCutoffRegex);
+  if (addrMatch && addrMatch.index > 0) {
+    text = text.substring(0, addrMatch.index).trim();
+  }
+
+  // 2. Correcciones ortográficas de marca e inteligencia de texto
+  text = text.replace(/\bFARMACTAS\b/gi, 'FARMACIAS');
+  text = text.replace(/\bFARMACIS\b/gi, 'FARMACIAS');
+  text = text.replace(/\bFARMACIA\s+S\b/gi, 'FARMACIAS');
+  text = text.replace(/\bFARMACIASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
+  text = text.replace(/\bFARMACTASDELAHORRO\b/gi, 'FARMACIAS DEL AHORRO');
+  text = text.replace(/\bDELAHORRO\b/gi, 'DEL AHORRO');
+
+  // 3. Estandarización a MAYÚSCULAS
+  text = text.toUpperCase();
+
+  // 4. Eliminación de caracteres especiales que rompan rutas de Windows (|, ,, ;, ., #) y los ilegales estándar (\ / : * ? " < > |)
+  text = text.replace(/[\\/:*?"<>|,;.#\x00-\x1f]/g, '');
+
+  // 5. Limpieza de espacios múltiples y caracteres residuales
+  text = text.replace(/\s{2,}/g, ' ').trim();
+
+  // 6. Restricción estricta de longitud máxima (máximo 60 caracteres)
+  if (text.length > 60) {
+    text = text.substring(0, 60).trim();
+  }
+  text = text.replace(/[\s\-_]+$/, '').trim();
+
+  return text.length > 0 ? text : null;
+}
+
+/**
+ * Función de extracción flexible y limpieza de Razón Social
+ * Soporta variaciones:
+ * - "RAZON SOCIAL DE LA EMPRESA GENERADORA:"
+ * - "RAZON SOCIAL:"
+ * - "EMPRESA GENERADORA:"
+ * Con o sin acentos, con o sin dos puntos, tolerante a espacios de escaneo.
  */
 function extractAndCleanRazonSocial(rawText) {
   if (!rawText) return null;
 
-  const text = rawText.replace(/\r?\n+/g, ' ');
-  const regex = /RAZ[OÓ]N\s+SOCIAL\s+DE\s+LA\s+EMPRESA\s+GENERADORA\s*:\s*(.*?)\s*DOMICILIO\s*:/i;
-  const match = text.match(regex);
+  // Unificar saltos de línea y limpiar espacios múltiples iniciales
+  const normalized = rawText.replace(/\r?\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-  if (!match || !match[1]) {
+  // 1. Regla RegEx flexible para prefijos de empresa
+  const prefixRegex = /(?:RAZ[OÓ]N\s+SOCIAL(?:\s+DE\s+LA)?(?:\s+EMPRESA)?(?:\s+GENERADORA)?|EMPRESA\s+GENERADORA)\s*[:.-]?\s*/i;
+  const prefixMatch = normalized.match(prefixRegex);
+
+  if (!prefixMatch) {
     return null;
   }
 
-  let extracted = match[1].trim();
-  // Limpiar espacios dobles o múltiples
-  extracted = extracted.replace(/\s{2,}/g, ' ');
-  // Eliminar caracteres prohibidos en nombres de archivos
-  extracted = extracted.replace(/[\\/:*?"<>|]/g, '');
-  extracted = extracted.trim();
+  let candidate = normalized.slice(prefixMatch.index + prefixMatch[0].length).trim();
 
-  return extracted.length > 0 ? extracted : null;
+  // 2. Delimitadores estándar posteriores en el formulario de manifiesto
+  const stopRegex = /\s*(?:DOMICI?LIO|DOMICTLIO|DIRECCI[OÓ]N|RFC\b|C\.?P\.?|TEL[EÉ]FONO|N[UÚ]MERO|AUTORIZACI[OÓ]N)\b\s*[:.-]?/i;
+  const stopMatch = candidate.match(stopRegex);
+  if (stopMatch && stopMatch.index > 0) {
+    candidate = candidate.slice(0, stopMatch.index).trim();
+  }
+
+  // 3. Sanitizar, corregir ortografía, limitar longitud y limpiar ruta de Windows
+  return sanitizeCompanyName(candidate);
 }
 
 /**
@@ -661,4 +717,11 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`=======================================================`);
 });
 
-export { app, countPdfPages, processWithPdfCo, processLocalFallback };
+export {
+  app,
+  countPdfPages,
+  processWithPdfCo,
+  processLocalFallback,
+  sanitizeCompanyName,
+  extractAndCleanRazonSocial
+};
